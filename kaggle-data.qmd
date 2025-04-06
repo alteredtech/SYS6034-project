@@ -12,11 +12,15 @@ library(purrr)
 library(fitdistrplus)
 library(dplyr)
 
-data_dir = "./kaggle/"
+data_dir = "./kaggle"
+image_dir = "./images"
+# Create the image folder if it doesn't exist
+if (!dir.exists(image_dir)) {
+  dir.create(image_dir)
+}
 ev_charge_path <- file.path(data_dir, "ev_charging_patterns.csv")
 ev_charge_patterns <- read_csv(ev_charge_path, show_col_types = FALSE)
 ```
-
 
 ```{r}
 # Cleans data where there might be NA, charge % is above or below 0-100%
@@ -25,7 +29,6 @@ data_clean <- ev_charge_patterns %>%
   filter(`State of Charge (End %)` <= 100) %>% # Drop charges over 100%
   filter(`State of Charge (Start %)` > 0) # Drop any charges that might be below 0%
 ```
-
 
 ```{r}
 # Factors the user and charge types
@@ -162,6 +165,14 @@ ggplot(data_plot, aes(x = interarrival_time)) +
     y = "Density"
   ) +
   theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "interarrival_time_plot_charger_type.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
 ```
 
 ```{r}
@@ -243,6 +254,14 @@ ggplot(data_plot_user, aes(x = interarrival_time_user)) +
     y = "Density"
   ) +
   theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "interarrival_time_plot_user_type.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
 ```
 
 ```{r}
@@ -261,6 +280,14 @@ data_clean %>%
        x = "Charging Rate (kW)",
        y = "Count") +
   theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "charging_rate_by_charger_type.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
 ```
 
 ```{r}
@@ -279,6 +306,14 @@ data_clean %>%
        x = "Charging Duration (hours)",
        y = "Count") +
   theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "charging_duration_by_charger_type.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
 ```
 
 ```{r}
@@ -297,6 +332,14 @@ data_clean %>%
        x = "Distance Driven (since last charge) (km)",
        y = "Count") +
   theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "charging_duration_by_charger_type.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
 ```
 
 ```{r}
@@ -315,49 +358,12 @@ data_clean %>%
        x = "Charge Difference",
        y = "Count") +
   theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "charging_diff_by_charger_type.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
