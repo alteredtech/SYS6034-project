@@ -3,6 +3,8 @@
 import simpy
 import random
 import uuid
+from dataclasses import dataclass
+from enum import Enum
 
 # Constants
 # Workday start and end times
@@ -22,13 +24,22 @@ THRESHOLD_CHARGE = 0.80
 SIM_DAYS = 1
 # Total number of EVs present in the fleet
 EVS = 10
+# Total number of chargers present in the fleet
+L1_CHARGERS = 7
+L2_CHARGERS = 0
+L3_CHARGERS = 0
 # Rate of charging in kW per hour
-CHARGER_RATE = {
-    "level1": 10, # Level 1 charger
-    "level2": 25, # Level 2 charger
-    "level3": 50  # Level 3 charger
-}
+class ChargerRate(Enum):
+    LEVEL1 = 10 # Level 1 charger
+    LEVEL2 = 25 # Level 2 charger
+    LEVEL3 = 50 # Level 3 charger
 # Delivery types with distance ranges in miles
+class DeliveryType(Enum):
+    SHORT = {"distance_min": 0, "distance_max": 25}
+    MEDIUM = {"distance_min": 25, "distance_max": 50}
+    LONG = {"distance_min": 50, "distance_max": 75}
+    NONE = {"distance_min": 0, "distance_max": 0}
+# Delivery types with their respective lambda and mu values
 DELIVERY_TYPES = {
     "short": {
         "distance_min": 0,
@@ -49,6 +60,12 @@ DELIVERY_TYPES = {
         "mu": 0.007432628
     }
 }
+# Driving states
+class DrivingState(Enum):
+    DRIVING = "Driving"
+    WAITING_TO_CHARGE = "WaitingToCharge"
+    CHARGING = "Charging"
+    PARKED = "Parked"
 
 # Class for electric vehicles
 class EV:
@@ -60,17 +77,119 @@ class EV:
         # the miles assigned to drive that day
         self.miles = 0
         # the delivery type assigned to the EV for the day
-        self.delivery_type = None
+        self.delivery_type = DeliveryType.NONE
+        # the current state of the EV
+        self.state = DrivingState.PARKED
+        # the current battery percentage of the EV
+        self.battery_pct = 1.0
+
+    def remove_battery_pct(self):
+        # remove the battery percentage based on the miles driven
+        self.battery_pct -= (self.miles * EFFICIENCY) / self.battery_capacity
+        # if the battery percentage is less than 0, set it to 0
+        if self.battery_pct < 0.0:
+            self.battery_pct = 0.0
+
+    def add_battery_pct(self, charge_added):
+        # add the battery percentage based on the charge added
+        self.battery_pct += (charge_added * 100) / self.battery_capacity
+        # if the battery percentage is greater than 1, set it to 1
+        if self.battery_pct > 1.0:
+            self.battery_pct = 1.0
+
+    def __repr__(self):
+        return f"<EV {self.id} | {self.delivery_type.name} | Battery: {self.battery_pct:.2f} | State: {self.state.value}>"
 
 # Class for charging stations
 class Charger:
-    def __init__(self, rate):
+    def __init__(self, sim_env, rate):
         # unique ID for the charger
         self.id = uuid.uuid4()
         # the level of the charger (level1, level2, level3)
         self.rate = rate
         # the number of evs that are in the queue for this charger
-        self.queue: list[EV] = []
+        self.resource = simpy.Resource(sim_env, capacity=1)
+
+# The warehouse class
+class Warehouse:
+    def __init__(self, env, short_deliveries, medium_deliveries, long_deliveries):
+        # the number of short deliveries
+        self.short_deliveries = short_deliveries
+        # the number of medium deliveries
+        self.medium_deliveries = medium_deliveries
+        # the number of long deliveries
+        self.long_deliveries = long_deliveries
+        # the simpy environment
+        self.env = env
+        # the list of chargers
+        self.chargers: list[Charger] = []
+        # the list of evs
+        self.evs: list[EV] = []
+        # the current time in the simulation
+        self.current_time = 0
+
+    def add_charger(self, charger):
+        # add a charger to the warehouse
+        self.chargers.append(charger)
+
+    def add_ev(self, ev):
+        # add an ev to the warehouse
+        self.evs.append(ev)
+    
+    def assign_delivery_type(self, ev):
+        # assign a delivery type to the ev
+        available = []
+        if self.short_deliveries > 0:
+            available.append(DeliveryType.SHORT)
+        if self.medium_deliveries > 0:
+            available.append(DeliveryType.MEDIUM)
+        if self.long_deliveries > 0:
+            available.append(DeliveryType.LONG)
+
+        if available:
+            chosen = random.choice(available)
+            ev.delivery_type = chosen
+            if chosen == DeliveryType.SHORT:
+                self.short_deliveries -= 1
+            elif chosen == DeliveryType.MEDIUM:
+                self.medium_deliveries -= 1
+            else:
+                self.long_deliveries -= 1
+        else:
+            ev.delivery_type = DeliveryType.NONE
+    
+    def set_miles(self, ev):
+        # set the miles for the ev based on the delivery type
+        if ev.delivery_type == DeliveryType.SHORT:
+            ev.miles = random.uniform(DELIVERY_TYPES["short"]["distance_min"], DELIVERY_TYPES["short"]["distance_max"])
+        elif ev.delivery_type == DeliveryType.MEDIUM:
+            ev.miles = random.uniform(DELIVERY_TYPES["medium"]["distance_min"], DELIVERY_TYPES["medium"]["distance_max"])
+        elif ev.delivery_type == DeliveryType.LONG:
+            ev.miles = random.uniform(DELIVERY_TYPES["long"]["distance_min"], DELIVERY_TYPES["long"]["distance_max"])
+        else:
+            print("No delivery type assigned to EV, please check you have the same number of deliveries as EVs")
+            print("EV ID: ", ev.id)
+            print("All EVs in the warehouse: ")
+            for e in self.evs:
+                print("EV ID: ", e.id)
+                print("Delivery Type: ", e.delivery_type)
+            exit()
+    
+    def unassign_delivery_type(self, ev):
+        # unassign the delivery type from the ev
+        if ev.delivery_type == DeliveryType.SHORT:
+            ev.delivery_type = DeliveryType.NONE
+            self.short_deliveries += 1
+        elif ev.delivery_type == DeliveryType.MEDIUM:
+            ev.delivery_type = DeliveryType.NONE
+            self.medium_deliveries += 1
+        elif ev.delivery_type == DeliveryType.LONG:
+            ev.delivery_type = DeliveryType.NONE
+            self.long_deliveries += 1
+        else:
+            print("No delivery type assigned to EV, please check you have the same number of deliveries as EVs")
+            print("EV ID: ", ev.id)
+            exit()
 
 # Data Model for storing charging information
 @dataclass
@@ -101,7 +220,8 @@ class ChargingData:
     wait_time: int
     # the time spent charging
     charge_time: int
-    # time left
+    # the EVs state
+    state: DrivingState
 
 
 # Steps for modeling the simulation:
@@ -115,7 +235,7 @@ class ChargingData:
 # - Track EV state: 'Driving', 'WaitingToCharge', 'Charging', 'Parked', 'Done'
 
 # 4. Assign delivery types to EVs
-# - Delivery types: Short, Medium, Long
+# - Delivery types: Short(5), Medium(3), Long(2)
 # - Sample mileage based on type
 # - Add randomness to delivery time (normal or gamma noise)
 
@@ -144,6 +264,12 @@ class ChargingData:
 
 ## 5.6. If end of workday occurs while in queue:
 # - Leave the queue and go to parked state
+def is_within_workday(env):
+    # Check if the current time is within the workday
+    if WORKDAY_START <= env.now < WORKDAY_END:
+        return True
+    else:
+        return False
 # - Resume next day if needed (optional)
 
 # 6. Log charging data for each EV:
@@ -155,7 +281,7 @@ class ChargingData:
 # - Charging duration
 # - Final battery %
 # - Reached target? (Yes/No)
-# - Number of days taken to charge (if multi-day charging is enabled)
+# - Number of days taken to charge
 
 # 7. Repeat steps 4–6 until the simulation ends
 # - Simulate multiple workdays (7am–9pm)
