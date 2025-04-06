@@ -1,0 +1,363 @@
+---
+title: "SYS6034-Proj"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(tidymodels)  # functions for ML
+library(tidyverse)   # functions for data manipulation
+library(ggplot2)
+library(purrr)
+library(fitdistrplus)
+library(dplyr)
+
+data_dir = "./kaggle/"
+ev_charge_path <- file.path(data_dir, "ev_charging_patterns.csv")
+ev_charge_patterns <- read_csv(ev_charge_path, show_col_types = FALSE)
+```
+
+
+```{r}
+# Cleans data where there might be NA, charge % is above or below 0-100%
+data_clean <- ev_charge_patterns %>% 
+  drop_na() %>% # Drop NA
+  filter(`State of Charge (End %)` <= 100) %>% # Drop charges over 100%
+  filter(`State of Charge (Start %)` > 0) # Drop any charges that might be below 0%
+```
+
+
+```{r}
+# Factors the user and charge types
+data_clean <- data_clean %>%
+  mutate(charger_type_num = as.numeric(factor(`Charger Type`, levels = c("Level 1", "Level 2", "DC Fast Charger")))) %>%
+  mutate(driver_type_num = as.numeric(factor(`User Type`, levels = c("Casual Driver", "Commuter", "Long-Distance Traveler"))))
+
+```
+
+```{r}
+# Swaps any time where start is larger than the end value. This is probably an issue with the creators simulation
+data_clean <- data_clean %>%
+  mutate(
+    soc_start_fixed = if_else(`State of Charge (Start %)` > `State of Charge (End %)`, `State of Charge (End %)`, `State of Charge (Start %)`),
+    soc_end_fixed   = if_else(`State of Charge (Start %)` > `State of Charge (End %)`, `State of Charge (Start %)`, `State of Charge (End %)`)
+  ) %>%
+  dplyr::select(-`State of Charge (Start %)`, -`State of Charge (End %)`) %>%
+  rename(
+    `State of Charge (Start %)` = soc_start_fixed,
+    `State of Charge (End %)` = soc_end_fixed
+  )
+```
+
+```{r}
+# Creates a difference of charge based on the battery capacity to get a charge difference
+data_clean$start_kw <- (data_clean$`State of Charge (Start %)`/100) * data_clean$`Battery Capacity (kWh)`
+data_clean$end_kw <- (data_clean$`State of Charge (End %)`/100) * data_clean$`Battery Capacity (kWh)`
+data_clean$charge_diff <- data_clean$end_kw-data_clean$start_kw
+```
+
+```{r}
+# Fix start times
+data_clean <- data_clean %>%
+  mutate(`Charging Start Time` = as.POSIXct(`Charging End Time`, format = "%Y-%m-%d %H:%M:%S") - (`Charging Duration (hours)` * 3600))
+```
+
+```{r}
+# Determine inter arrival times for Charger type
+
+# Ensure datetime format is correct
+data_clean <- data_clean %>%
+  mutate(`Charging Start Time` = ymd_hms(`Charging Start Time`))
+
+# Calculate interarrival times within each Charger Type group
+data_clean <- data_clean %>%
+  arrange(`Charger Type`, `Charging Start Time`) %>%
+  group_by(`Charger Type`) %>%
+  mutate(interarrival_time = as.numeric(difftime(`Charging Start Time`, lag(`Charging Start Time`), units = "mins"))) %>%
+  ungroup() %>%
+  filter(!is.na(interarrival_time) & interarrival_time > 0)
+
+# Function to fit distributions and return best one + parameters
+fit_distributions <- function(x) {
+  fits <- list(
+    exponential = fitdist(x, "exp"),
+    lognormal   = fitdist(x, "lnorm"),
+    gamma       = fitdist(x, "gamma"),
+    weibull     = fitdist(x, "weibull")
+  )
+  aics <- sapply(fits, function(f) f$aic)
+  best_name <- names(which.min(aics))
+  best_fit <- fits[[best_name]]
+  
+  list(best_dist = best_name, params = best_fit$estimate)
+}
+
+# Fit distributions by Charger Type
+fit_results <- data_clean %>%
+  group_by(`Charger Type`) %>%
+  summarise(
+    result = list(fit_distributions(interarrival_time)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    best_dist = map_chr(result, ~ .x$best_dist),
+    params = map(result, ~ .x$params)
+  ) %>%
+  dplyr::select(-result)
+
+# Merge back into data for plotting
+data_plot <- data_clean %>%
+  left_join(fit_results, by = "Charger Type") %>%
+  mutate(label = paste0(`Charger Type`, "\n(", best_dist, ")"))
+
+# M/M/1 queueing metrics
+mm1_metrics <- data_clean %>%
+  group_by(`Charger Type`) %>%
+  summarise(
+    lambda = 1 / mean(interarrival_time, na.rm = TRUE),
+    mu = 1 / mean(`Charging Duration (hours)` * 60, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    rho = lambda / mu,
+    L = rho / (1 - rho),
+    Lq = rho^2 / (1 - rho),
+    W = 1 / (mu - lambda),
+    Wq = lambda / (mu * (mu - lambda))
+  )
+
+# Compute density curves manually
+density_data <- fit_results %>%
+  rowwise() %>%
+  mutate(
+    x_vals = list(seq(0, max(data_clean$interarrival_time), length.out = 500)),
+    y_vals = list({
+      p <- params
+      switch(best_dist,
+             exponential = dexp(x_vals, rate = p[["rate"]]),
+             gamma       = dgamma(x_vals, shape = p[["shape"]], rate = p[["rate"]]),
+             weibull     = dweibull(x_vals, shape = p[["shape"]], scale = p[["scale"]]),
+             lognormal   = dlnorm(x_vals, meanlog = p[["meanlog"]], sdlog = p[["sdlog"]])
+      )
+    })
+  ) %>%
+  unnest(c(x_vals, y_vals)) %>%
+  mutate(label = paste0(`Charger Type`, "\n(", best_dist, ")"))
+```
+
+```{r}
+# Find a good binwidth
+iqr <- IQR(data_clean$interarrival_time, na.rm = TRUE)
+n <- sum(!is.na(data_clean$interarrival_time))
+binwidth_fd_interarrival <- 2 * iqr / (n^(1/3))
+
+# Final plot
+ggplot(data_plot, aes(x = interarrival_time)) +
+  geom_histogram(aes(y = ..density..), binwidth = binwidth_fd_interarrival, fill = "skyblue", color = "white") +
+  geom_line(data = density_data, aes(x = x_vals, y = y_vals), color = "red", linewidth = 1) +
+  facet_wrap(~ label, scales = "free_y") +
+  labs(
+    title = "Interarrival Time with Best-Fit Distribution For Charger Type",
+    x = "Interarrival Time (minutes)",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Calculate interarrival times within each User type group
+data_clean <- data_clean %>%
+  arrange(`User Type`, `Charging Start Time`) %>%
+  group_by(`User Type`) %>%
+  mutate(interarrival_time_user = as.numeric(difftime(`Charging Start Time`, lag(`Charging Start Time`), units = "mins"))) %>%
+  ungroup() %>%
+  filter(!is.na(interarrival_time_user) & interarrival_time_user > 0)
+
+# Fit distributions by Charger Type
+fit_results_user <- data_clean %>%
+  group_by(`User Type`) %>%
+  summarise(
+    result = list(fit_distributions(interarrival_time_user)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    best_dist = map_chr(result, ~ .x$best_dist),
+    params = map(result, ~ .x$params)
+  ) %>%
+  dplyr::select(-result)
+
+# Merge back into data for plotting
+data_plot_user <- data_clean %>%
+  left_join(fit_results_user, by = "User Type") %>%
+  mutate(label = paste0(`User Type`, "\n(", best_dist, ")"))
+
+# M/M/1 queueing metrics
+mm1_metrics_user <- data_clean %>%
+  group_by(`User Type`) %>%
+  summarise(
+    lambda = 1 / mean(interarrival_time_user, na.rm = TRUE),
+    mu = 1 / mean(`Charging Duration (hours)` * 60, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    rho = lambda / mu,
+    L = rho / (1 - rho),
+    Lq = rho^2 / (1 - rho),
+    W = 1 / (mu - lambda),
+    Wq = lambda / (mu * (mu - lambda))
+  )
+
+# Compute density curves manually
+density_data_user <- fit_results_user %>%
+  rowwise() %>%
+  mutate(
+    x_vals = list(seq(0, max(data_clean$interarrival_time_user), length.out = 500)),
+    y_vals = list({
+      p <- params
+      switch(best_dist,
+             exponential = dexp(x_vals, rate = p[["rate"]]),
+             gamma       = dgamma(x_vals, shape = p[["shape"]], rate = p[["rate"]]),
+             weibull     = dweibull(x_vals, shape = p[["shape"]], scale = p[["scale"]]),
+             lognormal   = dlnorm(x_vals, meanlog = p[["meanlog"]], sdlog = p[["sdlog"]])
+      )
+    })
+  ) %>%
+  unnest(c(x_vals, y_vals)) %>%
+  mutate(label = paste0(`User Type`, "\n(", best_dist, ")"))
+```
+
+```{r}
+# Find a good binwidth
+iqr <- IQR(data_clean$interarrival_time_user, na.rm = TRUE)
+n <- sum(!is.na(data_clean$interarrival_time_user))
+binwidth_fd_interarrival_user <- 2 * iqr / (n^(1/3))
+
+# Final plot
+ggplot(data_plot_user, aes(x = interarrival_time_user)) +
+  geom_histogram(aes(y = ..density..), binwidth = binwidth_fd_interarrival_user, fill = "skyblue", color = "white") +
+  geom_line(data = density_data_user, aes(x = x_vals, y = y_vals), color = "red", linewidth = 1) +
+  facet_wrap(~ label, scales = "free_y") +
+  labs(
+    title = "Interarrival Time with Best-Fit Distribution For User Type",
+    x = "Interarrival Time (minutes)",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Charger type and charge rate
+# find a good bin width
+iqr <- IQR(data_clean$`Charging Rate (kW)`, na.rm = TRUE)
+n <- sum(!is.na(data_clean$`Charging Rate (kW)`))
+binwidth_fd_rate <- 2 * iqr / (n^(1/3))
+
+# Plot
+data_clean %>%
+  ggplot(aes(x = `Charging Rate (kW)`)) +
+  geom_histogram(binwidth = binwidth_fd_rate, fill = "steelblue", color = "white") +
+  facet_wrap(~ `Charger Type`, scales = "free_y") +
+  labs(title = "Charging Rate by Charger Type",
+       x = "Charging Rate (kW)",
+       y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+# Charger type vs Charger hours
+# find a good bin width
+iqr <- IQR(data_clean$`Charging Duration (hours)`, na.rm = TRUE)
+n <- sum(!is.na(data_clean$`Charging Duration (hours)`))
+binwidth_fd_duration <- 2 * iqr / (n^(1/3))
+
+# plot
+data_clean %>%
+  ggplot(aes(x = `Charging Duration (hours)`)) +
+  geom_histogram(binwidth = binwidth_fd_duration, fill = "steelblue", color = "white") +
+  facet_wrap(~ `Charger Type`, scales = "free_y") +
+  labs(title = "Charging Duration (hours) by Charger Type",
+       x = "Charging Duration (hours)",
+       y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+# Charger type vs Distance Driven (since last charge) (km)
+# find a good bin width
+iqr <- IQR(data_clean$`Distance Driven (since last charge) (km)`, na.rm = TRUE)
+n <- sum(!is.na(data_clean$`Distance Driven (since last charge) (km)`))
+binwidth_fd_driven <- 2 * iqr / (n^(1/3))
+
+# plot
+data_clean %>%
+  ggplot(aes(x = `Distance Driven (since last charge) (km)`)) +
+  geom_histogram(binwidth = binwidth_fd_driven, fill = "steelblue", color = "white") +
+  facet_wrap(~ `Charger Type`, scales = "free_y") +
+  labs(title = "Distance Driven (since last charge) (km) by Charger Type",
+       x = "Distance Driven (since last charge) (km)",
+       y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+# Charger type vs charge_diff
+# find a good bin width
+iqr <- IQR(data_clean$charge_diff, na.rm = TRUE)
+n <- sum(!is.na(data_clean$charge_diff))
+binwidth_fd_diff <- 2 * iqr / (n^(1/3))
+
+# plot
+data_clean %>%
+  ggplot(aes(x = charge_diff)) +
+  geom_histogram(binwidth = binwidth_fd_diff, fill = "steelblue", color = "white") +
+  facet_wrap(~ `Charger Type`, scales = "free_y") +
+  labs(title = "Charge Difference by Charger Type",
+       x = "Charge Difference",
+       y = "Count") +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
