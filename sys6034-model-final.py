@@ -35,10 +35,22 @@ class ChargerRate(Enum):
     LEVEL3 = 50 # Level 3 charger
 # Delivery types with distance ranges in miles
 class DeliveryType(Enum):
-    SHORT = {"distance_min": 0, "distance_max": 25}
-    MEDIUM = {"distance_min": 25, "distance_max": 50}
-    LONG = {"distance_min": 50, "distance_max": 75}
-    NONE = {"distance_min": 0, "distance_max": 0}
+    SHORT = {
+        "distance_min": 0, 
+        "distance_max": 25
+        }
+    MEDIUM = {
+        "distance_min": 25, 
+        "distance_max": 50
+        }
+    LONG = {
+        "distance_min": 50, 
+        "distance_max": 75
+        }
+    NONE = {
+        "distance_min": 0, 
+        "distance_max": 0
+        }
 # Delivery types with their respective lambda and mu values
 DELIVERY_TYPES = {
     "short": {
@@ -127,14 +139,6 @@ class Warehouse:
         self.evs: list[EV] = []
         # the current time in the simulation
         self.current_time = 0
-
-    def add_charger(self, charger):
-        # add a charger to the warehouse
-        self.chargers.append(charger)
-
-    def add_ev(self, ev):
-        # add an ev to the warehouse
-        self.evs.append(ev)
     
     def assign_delivery_type(self, ev):
         # assign a delivery type to the ev
@@ -223,16 +227,26 @@ class ChargingData:
     # the EVs state
     state: DrivingState
 
+def main():
+    # Steps for modeling the simulation:
+    # 1. Create a SimPy environment
+    env = simpy.Environment()
+    # 2. Create a list of chargers
+    l1_chargers = [Charger(env, ChargerRate.LEVEL1) for _ in range(L1_CHARGERS)]
+    l2_chargers = [Charger(env, ChargerRate.LEVEL2) for _ in range(L2_CHARGERS)]
+    l3_chargers = [Charger(env, ChargerRate.LEVEL3) for _ in range(L3_CHARGERS)]
+    # - Model as a shared queue (simpy.Resource) or individual queues (list of Resources)
+    # - charger types (L1, L2, L3) with different service rates (mu)
+    chargers = l1_chargers + l2_chargers + l3_chargers
 
-# Steps for modeling the simulation:
-# 1. Create a SimPy environment
-# 2. Create a list of chargers
-# - Model as a shared queue (simpy.Resource) or individual queues (list of Resources)
-# - charger types (L1, L2, L3) with different service rates (mu)
+    # 3. Create a list of EVs
+    evs = [EV() for _ in range(EVS)]
+    # - Assign unique ID to each EV
+    # - Track EV state: 'Driving', 'WaitingToCharge', 'Charging', 'Parked', 'Done'
 
-# 3. Create a list of EVs
-# - Assign unique ID to each EV
-# - Track EV state: 'Driving', 'WaitingToCharge', 'Charging', 'Parked', 'Done'
+    # 4. Create a warehouse object
+    warehouse = Warehouse(env, short_deliveries=5, medium_deliveries=3, long_deliveries=2)
+    warehouse
 
 # 4. Assign delivery types to EVs
 # - Delivery types: Short(5), Medium(3), Long(2)
