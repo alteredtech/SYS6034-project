@@ -37,41 +37,28 @@ class ChargerRate(Enum):
 class DeliveryType(Enum):
     SHORT = {
         "distance_min": 0, 
-        "distance_max": 25
-        }
-    MEDIUM = {
-        "distance_min": 25, 
-        "distance_max": 50
-        }
-    LONG = {
-        "distance_min": 50, 
-        "distance_max": 75
-        }
-    NONE = {
-        "distance_min": 0, 
-        "distance_max": 0
-        }
-# Delivery types with their respective lambda and mu values
-DELIVERY_TYPES = {
-    "short": {
-        "distance_min": 0,
         "distance_max": 25,
         "lambda": 0.004295926,
         "mu": 0.007172583
-    },
-    "medium": {
-        "distance_min": 25,
+        }
+    MEDIUM = {
+        "distance_min": 25, 
         "distance_max": 50,
         "lambda": 0.005029587,
         "mu": 0.007148450
-    },
-    "long": {
-        "distance_min": 50,
+        }
+    LONG = {
+        "distance_min": 50, 
         "distance_max": 75,
         "lambda": 0.004772020,
         "mu": 0.007432628
-    }
-}
+        }
+    NONE = {
+        "distance_min": 0, 
+        "distance_max": 0,
+        "lambda": 0.0,
+        "mu": 0.0
+        }
 # Driving states
 class DrivingState(Enum):
     DRIVING = "Driving"
@@ -163,20 +150,14 @@ class Warehouse:
             ev.delivery_type = DeliveryType.NONE
     
     def set_miles(self, ev):
-        # set the miles for the ev based on the delivery type
-        if ev.delivery_type == DeliveryType.SHORT:
-            ev.miles = random.uniform(DELIVERY_TYPES["short"]["distance_min"], DELIVERY_TYPES["short"]["distance_max"])
-        elif ev.delivery_type == DeliveryType.MEDIUM:
-            ev.miles = random.uniform(DELIVERY_TYPES["medium"]["distance_min"], DELIVERY_TYPES["medium"]["distance_max"])
-        elif ev.delivery_type == DeliveryType.LONG:
-            ev.miles = random.uniform(DELIVERY_TYPES["long"]["distance_min"], DELIVERY_TYPES["long"]["distance_max"])
+        if ev.delivery_type != DeliveryType.NONE:
+            dist_range = ev.delivery_type.value
+            ev.miles = random.uniform(dist_range["distance_min"], dist_range["distance_max"])
         else:
-            print("No delivery type assigned to EV, please check you have the same number of deliveries as EVs")
-            print("EV ID: ", ev.id)
-            print("All EVs in the warehouse: ")
+            print(f"[ERROR] No delivery type assigned to EV {ev.id}")
+            print("All EVs in the warehouse:")
             for e in self.evs:
-                print("EV ID: ", e.id)
-                print("Delivery Type: ", e.delivery_type)
+                print(f"EV ID: {e.id} | Delivery Type: {e.delivery_type}")
             exit()
     
     def unassign_delivery_type(self, ev):
@@ -201,11 +182,11 @@ class ChargingData:
     # the unique ID for the EV
     ev_id: uuid.UUID
     # the current time in the simulation
-    current_time: int
+    current_time: float
     # the time the EV started charging
-    start_charge_time: int
+    start_charge_time: float
     # the time the EV finished charging
-    end_charge_time: int
+    end_charge_time: float
     # the amount of charge added in kWh
     charge_added: float
     # the charging station used
@@ -221,13 +202,89 @@ class ChargingData:
     # the charger level used
     charger_level: str
     # the time spent waiting in the queue
-    wait_time: int
+    wait_time: float
     # the time spent charging
-    charge_time: int
+    charge_time: float
     # the EVs state
     state: DrivingState
 
+def ev_process(env, ev: EV, warehouse: Warehouse, chargers: Charger, charging_logs: list[ChargingData]):
+    # Step 1: Assign delivery and set miles
+    warehouse.assign_delivery_type(ev)
+    warehouse.set_miles(ev)
+
+    # Step 2: Depart at Poisson-distributed interval
+    departure_delay = random.expovariate(ev.delivery_type.value["lambda"])
+    yield env.timeout(departure_delay)
+    ev.state = DrivingState.DRIVING
+
+    # Simulate delivery time (exponential service time)
+    # TODO: fix this because mu probably is not the correct value
+    delivery_time = random.expovariate(ev.delivery_type.value["mu"])
+    yield env.timeout(delivery_time)
+
+    # Step 3: Return to warehouse
+    ev.remove_battery_pct()
+    ev.state = DrivingState.WAITING_TO_CHARGE
+
+    # Step 4: Decide if charging is needed
+    if ev.battery_pct >= THRESHOLD_CHARGE:
+        ev.state = DrivingState.PARKED
+        return
+
+    # Step 5: Choose charger with shortest queue
+    available_chargers = sorted(chargers, key=lambda c: len(c.resource.queue))
+    chosen_charger = available_chargers[0]
+
+    queue_enter_time = env.now
+    with chosen_charger.resource.request() as req:
+        result = yield req | env.timeout(WORKDAY_END - env.now)
+
+        if req not in result:
+            # Left queue due to workday ending
+            ev.state = DrivingState.PARKED
+            return
+
+        start_charge_time = env.now
+        ev.state = DrivingState.CHARGING
+
+        # Step 6: Charge until reaching 75% battery
+        charge_needed_kwh = max(0, (TARGET_CHARGE - ev.battery_pct) * BATTERY_CAPACITY)
+        charge_duration = charge_needed_kwh / chosen_charger.rate.value
+
+        time_remaining = WORKDAY_END - env.now
+        if charge_duration > time_remaining:
+            # Not enough time to finish charging
+            yield env.timeout(time_remaining)
+            ev.add_battery_pct(chosen_charger.rate.value * time_remaining)
+        else:
+            yield env.timeout(charge_duration)
+            ev.add_battery_pct(charge_needed_kwh)
+
+        ev.state = DrivingState.PARKED
+        end_charge_time = env.now
+
+        # Step 7: Record data
+        charging_logs.append(ChargingData(
+            ev_id=ev.id,
+            current_time=env.now,
+            start_charge_time=start_charge_time,
+            end_charge_time=end_charge_time,
+            charge_added=charge_needed_kwh,
+            charger_id=chosen_charger.id,
+            delivery_type=ev.delivery_type.name,
+            distance_driven=ev.miles,
+            charged_to_target=(ev.battery_pct >= TARGET_CHARGE),
+            final_battery_pct=ev.battery_pct * 100,
+            charger_level=chosen_charger.rate.name,
+            wait_time=start_charge_time - queue_enter_time,
+            charge_time=end_charge_time - start_charge_time,
+            state=ev.state
+        ))
+
 def main():
+    DAYS = 180
+
     # Steps for modeling the simulation:
     # 1. Create a SimPy environment
     env = simpy.Environment()
@@ -246,7 +303,31 @@ def main():
 
     # 4. Create a warehouse object
     warehouse = Warehouse(env, short_deliveries=5, medium_deliveries=3, long_deliveries=2)
-    warehouse
+    warehouse.evs = evs
+    warehouse.chargers = chargers
+
+    # Charging data collection
+    charging_logs = []
+
+    # Daily loop for each workday
+    for day in range(DAYS):
+        day_start = day * 24 + WORKDAY_START
+        day_end = day * 24 + WORKDAY_END
+
+        # Schedule EV processes each day
+        env.process(ev_process(env, ev, warehouse, chargers, charging_logs))
+
+        # Run SimPy from WORKDAY_START to WORKDAY_END for this day
+        env.run(until=day_end)
+
+    # Print summary
+    print(f"Simulation completed for {DAYS} days.")
+    print(f"Total charging logs: {len(charging_logs)}")
+    for log in charging_logs:
+        print(log)
+
+if __name__ == "__main__":
+    main()
 
 # 4. Assign delivery types to EVs
 # - Delivery types: Short(5), Medium(3), Long(2)
@@ -278,12 +359,12 @@ def main():
 
 ## 5.6. If end of workday occurs while in queue:
 # - Leave the queue and go to parked state
-def is_within_workday(env):
-    # Check if the current time is within the workday
-    if WORKDAY_START <= env.now < WORKDAY_END:
-        return True
-    else:
-        return False
+# def is_within_workday(env):
+#     # Check if the current time is within the workday
+#     if WORKDAY_START <= env.now < WORKDAY_END:
+#         return True
+#     else:
+#         return False
 # - Resume next day if needed (optional)
 
 # 6. Log charging data for each EV:
