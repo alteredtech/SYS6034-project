@@ -23,9 +23,14 @@ ev_charge_patterns <- read_csv(ev_charge_path, show_col_types = FALSE)
 ```
 
 ```{r}
-# Cleans data where there might be NA, charge % is above or below 0-100%
-data_clean <- ev_charge_patterns %>% 
+# Available Locations
+# San Francisco, Los Angeles, Houston, Chicago, New York
+# Remove all other locations so we have more accurate data for arrivals and service
+data_clean <- ev_charge_patterns %>%
   drop_na() %>% # Drop NA
+  filter(`Charging Station Location` == "Los Angeles")
+# Cleans data where there might be NA, charge % is above or below 0-100%
+data_clean <- data_clean %>% 
   filter(
     `State of Charge (End %)` <= 100, # Drop charges over 100%
     `State of Charge (Start %)` > 0) # Drop any charges that might be below 0%
@@ -44,7 +49,6 @@ data_clean <- data_clean %>%
 
 ```{r}
 # Swaps any charge state where start is larger than the end value. This is probably an issue with the creators simulation
-sum(data_clean$`State of Charge (Start %)` > data_clean$`State of Charge (End %)`)
 data_clean <- data_clean %>%
   mutate(
     soc_start_fixed = if_else(`State of Charge (Start %)` > `State of Charge (End %)`, `State of Charge (End %)`, `State of Charge (Start %)`),
@@ -92,7 +96,8 @@ data_clean <- data_clean %>%
 ```{r}
 arrival_by_hour_user <- data_clean %>%
   mutate(hour = floor_date(`Charging Start Time`, unit = "hour")) %>%
-  count(`User Type`, hour)
+  count(`User Type`, hour) %>%
+  complete(`User Type`, hour = seq(min(hour), max(hour), by = "1 hour"), fill = list(n = 0))
 
 ggplot(arrival_by_hour_user, aes(x = hour, y = n)) +
   geom_line(color = "black") +
@@ -172,7 +177,7 @@ fit_distributions <- function(x) {
 ```{r}
 ggplot(data_clean, aes(x = interarrival_time)) +
   geom_histogram(aes(y = ..density..), binwidth = bw_int_user, fill = "gray") +
-  geom_density(color = "black", size = 1) +
+  geom_density(color = "black", linewidth = 1) +
   facet_wrap(~ `User Type`, scales = "free_y") +
   labs(
     title = "Interarrival Time Density by User Type",
@@ -195,13 +200,19 @@ distribution_fits <- data_plot %>%
   group_by(`User Type`) %>%
   summarise(fit = list(fit_distributions(interarrival_time)), .groups = "drop") %>%
   unnest_wider(fit)
+
+distribution_fits
+distribution_fits$params
 ```
 
 ```{r}
-# Create a density grid
-density_data <- data_plot %>%
+# Create evaluation grid per User Type
+x_grid <- data_plot %>%
   group_by(`User Type`) %>%
-  summarise(x_vals = list(seq(min(interarrival_time), max(interarrival_time), length.out = 500)), .groups = "drop") %>%
+  summarise(x_vals = list(seq(min(interarrival_time), max(interarrival_time), length.out = 500)), .groups = "drop")
+
+# Join with fit info
+density_data <- x_grid %>%
   left_join(distribution_fits, by = "User Type") %>%
   rowwise() %>%
   mutate(
@@ -209,7 +220,7 @@ density_data <- data_plot %>%
       x <- x_vals
       p <- params
       switch(best_dist,
-             exponential = dexp(x, rate = 1 / p["rate"]),
+             exponential = dexp(x, rate = p["rate"]),
              lognormal   = dlnorm(x, meanlog = p["meanlog"], sdlog = p["sdlog"]),
              gamma       = dgamma(x, shape = p["shape"], rate = p["rate"]),
              weibull     = dweibull(x, shape = p["shape"], scale = p["scale"])
@@ -220,14 +231,37 @@ density_data <- data_plot %>%
 ```
 
 ```{r}
+bin_counts <- data_plot %>%
+  mutate(bin = cut(interarrival_time, breaks = seq(
+    floor(min(interarrival_time, na.rm = TRUE)),
+    ceiling(max(interarrival_time, na.rm = TRUE)) + 1,
+    by = bw_int_user
+  ))) %>%
+  group_by(`User Type`, bin) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Peak y position per User Type
+hist_peaks <- bin_counts %>%
+  group_by(`User Type`) %>%
+  summarise(y_pos = max(count), .groups = "drop")
+
+density_scaled <- density_data %>%
+  group_by(`User Type`) %>%
+  mutate(y_vals_scaled = y_vals / max(y_vals, na.rm = TRUE)) %>%
+  left_join(hist_peaks, by = "User Type") %>%
+  mutate(y_vals_scaled = y_vals_scaled * y_pos)
+```
+
+
+```{r}
 ggplot(data_plot, aes(x = interarrival_time)) +
-  geom_histogram(aes(y = ..density..), binwidth = bw_int_user, fill = "skyblue", color = "white") +
-  geom_line(data = density_data, aes(x = x_vals, y = y_vals, color = best_dist), size = 1) +
+  geom_histogram(aes(y = ..count..), binwidth = bw_int_user, fill = "skyblue", color = "white") +
+  geom_line(data = density_scaled, aes(x = x_vals, y = y_vals_scaled, color = best_dist), linewidth = 1) +
   facet_wrap(~ `User Type`, scales = "free_y") +
   labs(
-    title = "Fitted Distribution Densities on Interarrival Times",
+    title = "Fitted Distribution Densities on Interarrival Times (Scaled)",
     x = "Interarrival Time (minutes)",
-    y = "Density",
+    y = "Count",
     color = "Best Fit"
   ) +
   theme_minimal()
@@ -267,9 +301,13 @@ density_df <- data.frame(x_vals = x_vals, y_vals = y_vals)
 ```
 
 ```{r}
+iqr <- IQR(interarrival_all$interarrival_time, na.rm = TRUE)
+n <- sum(!is.na(interarrival_all$interarrival_time))
+bw_int_user_all <- 2 * iqr / (n^(1/3))
+
 ggplot(interarrival_all, aes(x = interarrival_time)) +
-  geom_histogram(aes(y = ..density..), binwidth = 5, fill = "lightgray", color = "darkgray") +
-  geom_line(data = density_df, aes(x = x_vals, y = y_vals), color = "black", size = 1) +
+  geom_histogram(aes(y = ..density..), binwidth = bw_int_user_all, fill = "lightgray", color = "darkgray") +
+  geom_line(data = density_df, aes(x = x_vals, y = y_vals), color = "black", linewidth = 1) +
   labs(
     title = paste0("Overall Interarrival Time Distribution (Best Fit: ", best_fit_all$best_dist, ")"),
     x = "Interarrival Time (minutes)",
@@ -289,11 +327,18 @@ ggsave(
 ## Poisson rate
 
 ```{r}
-lambda_estimate <- 1 / mean(interarrival_all$interarrival_time)
-lambda_estimate
+poisson <- data_clean %>%
+  mutate(hour = lubridate::hour(`Charging Start Time`)) %>%
+  count(hour) %>%
+  complete(hour = 0:23, fill = list(n = 0)) %>%
+  summarise(lambda_hourly = mean(n))
 
-lambda_per_hour <- lambda_estimate * 60
-lambda_per_hour
+```
+
+
+```{r}
+lambda_estimate <- 1 / poisson$lambda_hourly 
+lambda_estimate
 ```
 
 # Charger Types
@@ -303,7 +348,8 @@ lambda_per_hour
 ```{r}
 arrival_by_charger_hour <- data_clean %>%
   mutate(hour = floor_date(`Charging Start Time`, unit = "hour")) %>%
-  count(`Charger Type`, hour)
+  count(`Charger Type`, hour) %>%
+  complete(`Charger Type`, hour = seq(min(hour), max(hour), by = "1 hour"), fill = list(n = 0))
 
 ggplot(arrival_by_charger_hour, aes(x = hour, y = n)) +
   geom_line(color = "black") +
@@ -312,6 +358,7 @@ ggplot(arrival_by_charger_hour, aes(x = hour, y = n)) +
     x = "Hour",
     y = "Number of Arrivals"
   ) +
+  ylim(0, NA) +
   theme_minimal() +
   theme(strip.text = element_text(face = "bold"))
 
@@ -380,20 +427,15 @@ mu_estimate <- 1 / mean(data_clean$`Charging Duration (hours)`)
 mu_estimate
 
 mu_per_min <- mu_estimate / 60
+mu_per_min
 ```
 
 ## Utilization
 
 ```{r}
-rho <- lambda_per_hour / mu_estimate
+rho <- lambda_estimate / mu_estimate
 rho
 ```
-
-
-
-
-
-
 
 
 ```{r}
@@ -417,6 +459,11 @@ max_counts <- rate_binned %>%
   group_by(`Charger Type`) %>%
   summarise(y_pos = max(count), .groups = "drop")
 
+rate_means <- data_clean %>%
+  group_by(`Charger Type`) %>%
+  summarise(mean_rate = mean(`Charging Rate (kW)`, na.rm = TRUE), .groups = "drop") %>%
+  mutate(label = paste0("Mean = ", round(mean_rate, 1)))
+
 rate_means_labeled <- rate_means %>%
   left_join(max_counts, by = "Charger Type") %>%
   mutate(label = paste0("Mean = ", round(mean_rate, 1)))
@@ -424,7 +471,7 @@ rate_means_labeled <- rate_means %>%
 data_clean %>%
   ggplot(aes(x = `Charging Rate (kW)`)) +
   geom_histogram(binwidth = binwidth_fd_rate, fill = "gray", color = "white") +
-  geom_vline(data = rate_means_labeled, aes(xintercept = mean_rate), color = "black", linetype = "dashed", size = 1) +
+  geom_vline(data = rate_means_labeled, aes(xintercept = mean_rate), color = "black", linetype = "dashed", linewidth = 1) +
   geom_text(
     data = rate_means_labeled,
     aes(x = mean_rate, y = y_pos, label = label),
