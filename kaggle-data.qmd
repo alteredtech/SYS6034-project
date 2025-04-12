@@ -26,20 +26,25 @@ ev_charge_patterns <- read_csv(ev_charge_path, show_col_types = FALSE)
 # Cleans data where there might be NA, charge % is above or below 0-100%
 data_clean <- ev_charge_patterns %>% 
   drop_na() %>% # Drop NA
-  filter(`State of Charge (End %)` <= 100) %>% # Drop charges over 100%
-  filter(`State of Charge (Start %)` > 0) # Drop any charges that might be below 0%
+  filter(
+    `State of Charge (End %)` <= 100, # Drop charges over 100%
+    `State of Charge (Start %)` > 0) # Drop any charges that might be below 0%
 ```
 
 ```{r}
 # Factors the user and charge types
 data_clean <- data_clean %>%
-  mutate(charger_type_num = as.numeric(factor(`Charger Type`, levels = c("Level 1", "Level 2", "DC Fast Charger")))) %>%
-  mutate(driver_type_num = as.numeric(factor(`User Type`, levels = c("Casual Driver", "Commuter", "Long-Distance Traveler"))))
-
+  mutate(
+    charger_type = factor(`Charger Type`, levels = c("Level 1", "Level 2", "DC Fast Charger")),
+    user_type = factor(`User Type`, levels = c("Casual Driver", "Commuter", "Long-Distance Traveler")),
+    charger_type_num = as.numeric(charger_type),
+    driver_type_num = as.numeric(user_type)
+  )
 ```
 
 ```{r}
-# Swaps any time where start is larger than the end value. This is probably an issue with the creators simulation
+# Swaps any charge state where start is larger than the end value. This is probably an issue with the creators simulation
+sum(data_clean$`State of Charge (Start %)` > data_clean$`State of Charge (End %)`)
 data_clean <- data_clean %>%
   mutate(
     soc_start_fixed = if_else(`State of Charge (Start %)` > `State of Charge (End %)`, `State of Charge (End %)`, `State of Charge (Start %)`),
@@ -54,33 +59,100 @@ data_clean <- data_clean %>%
 
 ```{r}
 # Creates a difference of charge based on the battery capacity to get a charge difference
-data_clean$start_kw <- (data_clean$`State of Charge (Start %)`/100) * data_clean$`Battery Capacity (kWh)`
-data_clean$end_kw <- (data_clean$`State of Charge (End %)`/100) * data_clean$`Battery Capacity (kWh)`
-data_clean$charge_diff <- data_clean$end_kw-data_clean$start_kw
+data_clean <- data_clean %>%
+  mutate(
+    start_kw = (`State of Charge (Start %)` / 100) * `Battery Capacity (kWh)`,
+    end_kw   = (`State of Charge (End %)` / 100) * `Battery Capacity (kWh)`,
+    charge_diff = end_kw - start_kw
+  )
 ```
 
 ```{r}
 # Fix start times
 data_clean <- data_clean %>%
-  mutate(`Charging Start Time` = as.POSIXct(`Charging End Time`, format = "%Y-%m-%d %H:%M:%S") - (`Charging Duration (hours)` * 3600))
+  mutate(`Charging Start Time` = `Charging End Time` - lubridate::dhours(`Charging Duration (hours)`))
 ```
 
 ```{r}
-# Determine inter arrival times for Charger type
-
-# Ensure datetime format is correct
+# Charging efficiency
 data_clean <- data_clean %>%
-  mutate(`Charging Start Time` = ymd_hms(`Charging Start Time`))
+  mutate(efficiency_kwh_per_hr = charge_diff / `Charging Duration (hours)`)
+```
 
-# Calculate interarrival times within each Charger Type group
+```{r}
+# Arrival rate grouping
 data_clean <- data_clean %>%
-  arrange(`Charger Type`, `Charging Start Time`) %>%
-  group_by(`Charger Type`) %>%
+  mutate(hour = lubridate::hour(`Charging Start Time`))
+```
+
+# User Types
+
+## Arrivals by Hour
+
+```{r}
+arrival_by_hour_user <- data_clean %>%
+  mutate(hour = floor_date(`Charging Start Time`, unit = "hour")) %>%
+  count(`User Type`, hour)
+
+ggplot(arrival_by_hour_user, aes(x = hour, y = n)) +
+  geom_line(color = "black") +
+  labs(
+    title = "Hourly EV Arrivals of all User Type",
+    x = "Hour",
+    y = "Number of Arrivals"
+  ) +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"))
+
+ggsave(
+  filename = file.path(image_dir, "hourly_arrivals_of_all_users.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
+```
+
+## Interarrival times
+
+```{r}
+data_clean <- data_clean %>%
+  arrange(`User Type`, `Charging Start Time`) %>%
+  group_by(`User Type`) %>%
   mutate(interarrival_time = as.numeric(difftime(`Charging Start Time`, lag(`Charging Start Time`), units = "mins"))) %>%
-  ungroup() %>%
-  filter(!is.na(interarrival_time) & interarrival_time > 0)
+  ungroup()
 
-# Function to fit distributions and return best one + parameters
+data_plot <- data_clean %>%
+  filter(!is.na(interarrival_time), is.finite(interarrival_time), interarrival_time > 0)
+```
+
+### Individual
+
+```{r}
+iqr <- IQR(data_plot$interarrival_time, na.rm = TRUE)
+n <- sum(!is.na(data_plot$interarrival_time))
+bw_int_user <- 2 * iqr / (n^(1/3))
+
+ggplot(data_plot, aes(x = interarrival_time)) +
+  geom_histogram(binwidth = bw_int_user, fill = "gray") +
+  facet_wrap(~ `User Type`, scales = "free_y") +
+  labs(
+    title = "Histogram of Interarrival Times by User Type",
+    x = "Interarrival Time (minutes)",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "histogram_count_interarrival_times_by_user.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
+```
+
+```{r}
 fit_distributions <- function(x) {
   fits <- list(
     exponential = fitdist(x, "exp"),
@@ -95,100 +167,73 @@ fit_distributions <- function(x) {
   list(best_dist = best_name, params = best_fit$estimate)
 }
 
-# Fit distributions by Charger Type
-fit_results <- data_clean %>%
-  group_by(`Charger Type`) %>%
-  summarise(
-    result = list(fit_distributions(interarrival_time)),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    best_dist = map_chr(result, ~ .x$best_dist),
-    params = map(result, ~ .x$params)
-  ) %>%
-  dplyr::select(-result)
+```
 
-# Merge back into data for plotting
-data_plot <- data_clean %>%
-  left_join(fit_results, by = "Charger Type") %>%
-  mutate(label = paste0(`Charger Type`, "\n(", best_dist, ")"))
+```{r}
+ggplot(data_clean, aes(x = interarrival_time)) +
+  geom_histogram(aes(y = ..density..), binwidth = bw_int_user, fill = "gray") +
+  geom_density(color = "black", size = 1) +
+  facet_wrap(~ `User Type`, scales = "free_y") +
+  labs(
+    title = "Interarrival Time Density by User Type",
+    x = "Interarrival Time (minutes)",
+    y = "Density"
+  ) +
+  theme_minimal()
 
-# M/M/1 queueing metrics
-mm1_metrics <- data_clean %>%
-  group_by(`Charger Type`) %>%
-  summarise(
-    lambda = 1 / mean(interarrival_time, na.rm = TRUE),
-    mu = 1 / mean(`Charging Duration (hours)` * 60, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    rho = lambda / mu,
-    L = rho / (1 - rho),
-    Lq = rho^2 / (1 - rho),
-    W = 1 / (mu - lambda),
-    Wq = lambda / (mu * (mu - lambda))
-  )
+ggsave(
+  filename = file.path(image_dir, "interarrival_time_density_user.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
+```
 
-# Compute density curves manually
-density_data <- fit_results %>%
+```{r}
+distribution_fits <- data_plot %>%
+  group_by(`User Type`) %>%
+  summarise(fit = list(fit_distributions(interarrival_time)), .groups = "drop") %>%
+  unnest_wider(fit)
+```
+
+```{r}
+# Create a density grid
+density_data <- data_plot %>%
+  group_by(`User Type`) %>%
+  summarise(x_vals = list(seq(min(interarrival_time), max(interarrival_time), length.out = 500)), .groups = "drop") %>%
+  left_join(distribution_fits, by = "User Type") %>%
   rowwise() %>%
   mutate(
-    x_vals = list(seq(0, max(data_clean$interarrival_time), length.out = 500)),
     y_vals = list({
+      x <- x_vals
       p <- params
       switch(best_dist,
-             exponential = dexp(x_vals, rate = p[["rate"]]),
-             gamma       = dgamma(x_vals, shape = p[["shape"]], rate = p[["rate"]]),
-             weibull     = dweibull(x_vals, shape = p[["shape"]], scale = p[["scale"]]),
-             lognormal   = dlnorm(x_vals, meanlog = p[["meanlog"]], sdlog = p[["sdlog"]])
+             exponential = dexp(x, rate = 1 / p["rate"]),
+             lognormal   = dlnorm(x, meanlog = p["meanlog"], sdlog = p["sdlog"]),
+             gamma       = dgamma(x, shape = p["shape"], rate = p["rate"]),
+             weibull     = dweibull(x, shape = p["shape"], scale = p["scale"])
       )
     })
   ) %>%
-  unnest(c(x_vals, y_vals)) %>%
-  mutate(label = paste0(`Charger Type`, "\n(", best_dist, ")"))
-
-mm1_metrics
+  unnest(c(x_vals, y_vals))
 ```
 
 ```{r}
-# Find a good binwidth
-iqr <- IQR(data_clean$interarrival_time, na.rm = TRUE)
-n <- sum(!is.na(data_clean$interarrival_time))
-binwidth_fd_interarrival <- 2 * iqr / (n^(1/3))
-
-# Final plot
 ggplot(data_plot, aes(x = interarrival_time)) +
-  geom_histogram(aes(y = ..density..), binwidth = binwidth_fd_interarrival, fill = "skyblue", color = "white") +
-  geom_line(data = density_data, aes(x = x_vals, y = y_vals), color = "red", linewidth = 1) +
-  facet_wrap(~ label, scales = "free_y") +
+  geom_histogram(aes(y = ..density..), binwidth = bw_int_user, fill = "skyblue", color = "white") +
+  geom_line(data = density_data, aes(x = x_vals, y = y_vals, color = best_dist), size = 1) +
+  facet_wrap(~ `User Type`, scales = "free_y") +
   labs(
-    title = "Interarrival Time with Best-Fit Distribution For Charger Type",
+    title = "Fitted Distribution Densities on Interarrival Times",
     x = "Interarrival Time (minutes)",
-    y = "Density"
+    y = "Density",
+    color = "Best Fit"
   ) +
   theme_minimal()
 
 ggsave(
-  filename = file.path(image_dir, "interarrival_time_plot_charger_type_dist.png"),  # Name of the saved file
-  plot = last_plot(),  # The plot you just created
-  width = 8,           # Width of the plot (in inches)
-  height = 6,          # Height of the plot (in inches)
-  dpi = 300            # Resolution of the plot (in dpi)
-)
-
-# Final plot
-ggplot(data_plot, aes(x = interarrival_time)) +
-  geom_histogram(binwidth = binwidth_fd_interarrival, fill = "skyblue", color = "white") +
-  facet_wrap(~ label, scales = "free_y") +
-  labs(
-    title = "Interarrival Time with Best-Fit Distribution For Charger Type",
-    x = "Interarrival Time (minutes)",
-    y = "Density"
-  ) +
-  theme_minimal()
-
-ggsave(
-  filename = file.path(image_dir, "interarrival_time_plot_charger_type.png"),  # Name of the saved file
+  filename = file.path(image_dir, "fitted_best_distribution_densities_interarrival_user.png"),  # Name of the saved file
   plot = last_plot(),  # The plot you just created
   width = 8,           # Width of the plot (in inches)
   height = 6,          # Height of the plot (in inches)
@@ -196,115 +241,160 @@ ggsave(
 )
 ```
 
+### Combined
+
 ```{r}
-# Calculate interarrival times within each User type group
+interarrival_all <- data_clean %>%
+  arrange(`Charging Start Time`) %>%
+  mutate(interarrival_time = as.numeric(difftime(`Charging Start Time`, lag(`Charging Start Time`), units = "mins"))) %>%
+  filter(!is.na(interarrival_time), is.finite(interarrival_time), interarrival_time > 0)
+
+best_fit_all <- fit_distributions(interarrival_all$interarrival_time)
+best_fit_all
+```
+
+```{r}
+x_vals <- seq(min(interarrival_all$interarrival_time), max(interarrival_all$interarrival_time), length.out = 500)
+
+y_vals <- switch(best_fit_all$best_dist,
+  exponential = dexp(x_vals, rate = 1 / best_fit_all$params["rate"]),
+  lognormal   = dlnorm(x_vals, meanlog = best_fit_all$params["meanlog"], sdlog = best_fit_all$params["sdlog"]),
+  gamma       = dgamma(x_vals, shape = best_fit_all$params["shape"], rate = best_fit_all$params["rate"]),
+  weibull     = dweibull(x_vals, shape = best_fit_all$params["shape"], scale = best_fit_all$params["scale"])
+)
+
+density_df <- data.frame(x_vals = x_vals, y_vals = y_vals)
+```
+
+```{r}
+ggplot(interarrival_all, aes(x = interarrival_time)) +
+  geom_histogram(aes(y = ..density..), binwidth = 5, fill = "lightgray", color = "darkgray") +
+  geom_line(data = density_df, aes(x = x_vals, y = y_vals), color = "black", size = 1) +
+  labs(
+    title = paste0("Overall Interarrival Time Distribution (Best Fit: ", best_fit_all$best_dist, ")"),
+    x = "Interarrival Time (minutes)",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "overall_interarrival_time_distribution.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
+```
+
+## Poisson rate
+
+```{r}
+lambda_estimate <- 1 / mean(interarrival_all$interarrival_time)
+lambda_estimate
+
+lambda_per_hour <- lambda_estimate * 60
+lambda_per_hour
+```
+
+# Charger Types
+
+# Hourly Arrivals
+
+```{r}
+arrival_by_charger_hour <- data_clean %>%
+  mutate(hour = floor_date(`Charging Start Time`, unit = "hour")) %>%
+  count(`Charger Type`, hour)
+
+ggplot(arrival_by_charger_hour, aes(x = hour, y = n)) +
+  geom_line(color = "black") +
+  labs(
+    title = "Hourly EV Arrivals of all Charger Type",
+    x = "Hour",
+    y = "Number of Arrivals"
+  ) +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"))
+
+ggsave(
+  filename = file.path(image_dir, "hourly_arrivals_all_charger_types.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
+```
+
+## Charge efficiency
+
+```{r}
 data_clean <- data_clean %>%
-  arrange(`User Type`, `Charging Start Time`) %>%
-  group_by(`User Type`) %>%
-  mutate(interarrival_time_user = as.numeric(difftime(`Charging Start Time`, lag(`Charging Start Time`), units = "mins"))) %>%
-  ungroup() %>%
-  filter(!is.na(interarrival_time_user) & interarrival_time_user > 0)
+  mutate(efficiency_kwh_per_hr = charge_diff / `Charging Duration (hours)`)
 
-# Fit distributions by Charger Type
-fit_results_user <- data_clean %>%
-  group_by(`User Type`) %>%
-  summarise(
-    result = list(fit_distributions(interarrival_time_user)),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    best_dist = map_chr(result, ~ .x$best_dist),
-    params = map(result, ~ .x$params)
-  ) %>%
-  dplyr::select(-result)
-
-# Merge back into data for plotting
-data_plot_user <- data_clean %>%
-  left_join(fit_results_user, by = "User Type") %>%
-  mutate(label = paste0(`User Type`, "\n(", best_dist, ")"))
-
-# M/M/1 queueing metrics
-mm1_metrics_user <- data_clean %>%
-  group_by(`User Type`) %>%
-  summarise(
-    lambda = 1 / mean(interarrival_time_user, na.rm = TRUE),
-    mu = 1 / mean(`Charging Duration (hours)` * 60, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    rho = lambda / mu,
-    L = rho / (1 - rho),
-    Lq = rho^2 / (1 - rho),
-    W = 1 / (mu - lambda),
-    Wq = lambda / (mu * (mu - lambda))
-  )
-
-# Compute density curves manually
-density_data_user <- fit_results_user %>%
-  rowwise() %>%
-  mutate(
-    x_vals = list(seq(0, max(data_clean$interarrival_time_user), length.out = 500)),
-    y_vals = list({
-      p <- params
-      switch(best_dist,
-             exponential = dexp(x_vals, rate = p[["rate"]]),
-             gamma       = dgamma(x_vals, shape = p[["shape"]], rate = p[["rate"]]),
-             weibull     = dweibull(x_vals, shape = p[["shape"]], scale = p[["scale"]]),
-             lognormal   = dlnorm(x_vals, meanlog = p[["meanlog"]], sdlog = p[["sdlog"]])
-      )
-    })
-  ) %>%
-  unnest(c(x_vals, y_vals)) %>%
-  mutate(label = paste0(`User Type`, "\n(", best_dist, ")"))
-
-mm1_metrics_user
+iqr <- IQR(data_clean$efficiency_kwh_per_hr, na.rm = TRUE)
+n <- sum(!is.na(data_clean$efficiency_kwh_per_hr))
+bw_charge_efficiency <- 2 * iqr / (n^(1/3))
 ```
+
+### Individual
 
 ```{r}
-# Find a good binwidth
-iqr <- IQR(data_clean$interarrival_time_user, na.rm = TRUE)
-n <- sum(!is.na(data_clean$interarrival_time_user))
-binwidth_fd_interarrival_user <- 2 * iqr / (n^(1/3))
-
-# Final plot
-ggplot(data_plot_user, aes(x = interarrival_time_user)) +
-  geom_histogram(aes(y = ..density..), binwidth = binwidth_fd_interarrival_user, fill = "skyblue", color = "white") +
-  geom_line(data = density_data_user, aes(x = x_vals, y = y_vals), color = "red", linewidth = 1) +
-  facet_wrap(~ label, scales = "free_y") +
+ggplot(data_clean, aes(x = efficiency_kwh_per_hr)) +
+  geom_histogram(binwidth = bw_charge_efficiency, fill = "gray", color = "black") +
+  facet_wrap(~ `Charger Type`, scales = "free_y") +
   labs(
-    title = "Interarrival Time with Best-Fit Distribution For User Type",
-    x = "Interarrival Time (minutes)",
-    y = "Density"
+    title = "Charging Efficiency per Session (Faceted by Charger Type)",
+    x = "Efficiency (kWh per hour)",
+    y = "Count"
   ) +
   theme_minimal()
-
 ggsave(
-  filename = file.path(image_dir, "interarrival_time_plot_user_type_dist.png"),  # Name of the saved file
-  plot = last_plot(),  # The plot you just created
-  width = 8,           # Width of the plot (in inches)
-  height = 6,          # Height of the plot (in inches)
-  dpi = 300            # Resolution of the plot (in dpi)
-)
-
-# Final plot
-ggplot(data_plot_user, aes(x = interarrival_time_user)) +
-  geom_histogram(binwidth = binwidth_fd_interarrival_user, fill = "skyblue", color = "white") +
-  facet_wrap(~ label, scales = "free_y") +
-  labs(
-    title = "Interarrival Time with Best-Fit Distribution For User Type",
-    x = "Interarrival Time (minutes)",
-    y = "Density"
-  ) +
-  theme_minimal()
-
-ggsave(
-  filename = file.path(image_dir, "interarrival_time_plot_user_type.png"),  # Name of the saved file
+  filename = file.path(image_dir, "charging_efficiency_individual.png"),  # Name of the saved file
   plot = last_plot(),  # The plot you just created
   width = 8,           # Width of the plot (in inches)
   height = 6,          # Height of the plot (in inches)
   dpi = 300            # Resolution of the plot (in dpi)
 )
 ```
+
+### Combined
+
+```{r}
+ggplot(data_clean, aes(x = efficiency_kwh_per_hr)) +
+  geom_histogram(binwidth = bw_charge_efficiency, fill = "gray", color = "black") +
+  labs(title = "Charging Efficiency (kWh per hour)", x = "Efficiency", y = "Count") +
+  theme_minimal()
+
+ggsave(
+  filename = file.path(image_dir, "charging_efficiency.png"),  # Name of the saved file
+  plot = last_plot(),  # The plot you just created
+  width = 8,           # Width of the plot (in inches)
+  height = 6,          # Height of the plot (in inches)
+  dpi = 300            # Resolution of the plot (in dpi)
+)
+```
+
+## Service rate
+
+```{r}
+mu_estimate <- 1 / mean(data_clean$`Charging Duration (hours)`)
+mu_estimate
+
+mu_per_min <- mu_estimate / 60
+```
+
+## Utilization
+
+```{r}
+rho <- lambda_per_hour / mu_estimate
+rho
+```
+
+
+
+
+
+
+
 
 ```{r}
 # Charger type and charge rate
@@ -313,14 +403,40 @@ iqr <- IQR(data_clean$`Charging Rate (kW)`, na.rm = TRUE)
 n <- sum(!is.na(data_clean$`Charging Rate (kW)`))
 binwidth_fd_rate <- 2 * iqr / (n^(1/3))
 
-# Plot
+binwidth <- binwidth_fd_rate
+
+rate_binned <- data_clean %>%
+  mutate(bin = cut(`Charging Rate (kW)`, breaks = seq(floor(min(`Charging Rate (kW)`, na.rm = TRUE)), 
+                                                      ceiling(max(`Charging Rate (kW)`, na.rm = TRUE)), 
+                                                      by = binwidth))) %>%
+  group_by(`Charger Type`, bin) %>%
+  summarise(count = n(), .groups = "drop")
+
+# Get max count per charger type for label placement
+max_counts <- rate_binned %>%
+  group_by(`Charger Type`) %>%
+  summarise(y_pos = max(count), .groups = "drop")
+
+rate_means_labeled <- rate_means %>%
+  left_join(max_counts, by = "Charger Type") %>%
+  mutate(label = paste0("Mean = ", round(mean_rate, 1)))
+
 data_clean %>%
   ggplot(aes(x = `Charging Rate (kW)`)) +
-  geom_histogram(binwidth = binwidth_fd_rate, fill = "steelblue", color = "white") +
+  geom_histogram(binwidth = binwidth_fd_rate, fill = "gray", color = "white") +
+  geom_vline(data = rate_means_labeled, aes(xintercept = mean_rate), color = "black", linetype = "dashed", size = 1) +
+  geom_text(
+    data = rate_means_labeled,
+    aes(x = mean_rate, y = y_pos, label = label),
+    vjust = -0.5, hjust = -0.25,
+    color = "black", size = 3
+  ) +
   facet_wrap(~ `Charger Type`, scales = "free_y") +
-  labs(title = "Charging Rate by Charger Type",
-       x = "Charging Rate (kW)",
-       y = "Count") +
+  labs(
+    title = "Charging Rate by Charger Type (with Mean Line and Label)",
+    x = "Charging Rate (kW)",
+    y = "Count"
+  ) +
   theme_minimal()
 
 ggsave(
@@ -332,105 +448,3 @@ ggsave(
 )
 ```
 
-```{r}
-# Charger type vs Charger hours
-# find a good bin width
-iqr <- IQR(data_clean$`Charging Duration (hours)`, na.rm = TRUE)
-n <- sum(!is.na(data_clean$`Charging Duration (hours)`))
-binwidth_fd_duration <- 2 * iqr / (n^(1/3))
-
-# plot
-data_clean %>%
-  ggplot(aes(x = `Charging Duration (hours)`)) +
-  geom_histogram(binwidth = binwidth_fd_duration, fill = "steelblue", color = "white") +
-  facet_wrap(~ `Charger Type`, scales = "free_y") +
-  labs(title = "Charging Duration (hours) by Charger Type",
-       x = "Charging Duration (hours)",
-       y = "Count") +
-  theme_minimal()
-
-ggsave(
-  filename = file.path(image_dir, "charging_duration_by_charger_type.png"),  # Name of the saved file
-  plot = last_plot(),  # The plot you just created
-  width = 8,           # Width of the plot (in inches)
-  height = 6,          # Height of the plot (in inches)
-  dpi = 300            # Resolution of the plot (in dpi)
-)
-```
-```{r}
-# Charger type vs Charger hours
-# find a good bin width
-iqr <- IQR(data_clean$`Charging Duration (hours)`, na.rm = TRUE)
-n <- sum(!is.na(data_clean$`Charging Duration (hours)`))
-binwidth_fd_duration_2 <- 2 * iqr / (n^(1/3))
-
-# plot
-data_clean %>%
-  ggplot(aes(x = `Charging Duration (hours)`)) +
-  geom_histogram(binwidth = binwidth_fd_duration_2, fill = "steelblue", color = "white") +
-  facet_wrap(~ `User Type`, scales = "free_y") +
-  labs(title = "Charging Duration (hours) by User Type",
-       x = "Charging Duration (hours)",
-       y = "Count") +
-  theme_minimal()
-
-ggsave(
-  filename = file.path(image_dir, "charging_duration_by_user_type.png"),  # Name of the saved file
-  plot = last_plot(),  # The plot you just created
-  width = 8,           # Width of the plot (in inches)
-  height = 6,          # Height of the plot (in inches)
-  dpi = 300            # Resolution of the plot (in dpi)
-)
-```
-
-```{r}
-# Charger type vs Distance Driven (since last charge) (km)
-# find a good bin width
-iqr <- IQR(data_clean$`Distance Driven (since last charge) (km)`, na.rm = TRUE)
-n <- sum(!is.na(data_clean$`Distance Driven (since last charge) (km)`))
-binwidth_fd_driven <- 2 * iqr / (n^(1/3))
-
-# plot
-data_clean %>%
-  ggplot(aes(x = `Distance Driven (since last charge) (km)`)) +
-  geom_histogram(binwidth = binwidth_fd_driven, fill = "steelblue", color = "white") +
-  facet_wrap(~ `Charger Type`, scales = "free_y") +
-  labs(title = "Distance Driven (since last charge) (km) by Charger Type",
-       x = "Distance Driven (since last charge) (km)",
-       y = "Count") +
-  theme_minimal()
-
-ggsave(
-  filename = file.path(image_dir, "charging_duration_by_charger_type.png"),  # Name of the saved file
-  plot = last_plot(),  # The plot you just created
-  width = 8,           # Width of the plot (in inches)
-  height = 6,          # Height of the plot (in inches)
-  dpi = 300            # Resolution of the plot (in dpi)
-)
-```
-
-```{r}
-# Charger type vs charge_diff
-# find a good bin width
-iqr <- IQR(data_clean$charge_diff, na.rm = TRUE)
-n <- sum(!is.na(data_clean$charge_diff))
-binwidth_fd_diff <- 2 * iqr / (n^(1/3))
-
-# plot
-data_clean %>%
-  ggplot(aes(x = charge_diff)) +
-  geom_histogram(binwidth = binwidth_fd_diff, fill = "steelblue", color = "white") +
-  facet_wrap(~ `Charger Type`, scales = "free_y") +
-  labs(title = "Charge Difference by Charger Type",
-       x = "Charge Difference",
-       y = "Count") +
-  theme_minimal()
-
-ggsave(
-  filename = file.path(image_dir, "charging_diff_by_charger_type.png"),  # Name of the saved file
-  plot = last_plot(),  # The plot you just created
-  width = 8,           # Width of the plot (in inches)
-  height = 6,          # Height of the plot (in inches)
-  dpi = 300            # Resolution of the plot (in dpi)
-)
-```
