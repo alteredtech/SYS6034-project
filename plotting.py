@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from scipy import stats
 import numpy as np
 import random
+import math
 
 def load_logs(log_directory="logs"):
     log_files = [f for f in os.listdir(log_directory) if f.endswith("_logs.json")]
@@ -25,24 +26,38 @@ def unpack_extra(df):
     df = pd.concat([df.drop(columns=['extra']), extra_df], axis=1)
     return df
 
-def plot_histograms_by_sim(df, col_name, binwidth=5, save_dir="output"):
+def plot_histograms_by_sim_combined(df, col_name, binwidth=5, save_dir="output"):
     os.makedirs(save_dir, exist_ok=True)
     sims = df['source_file'].unique()
+    num_sims = len(sims)
 
-    for sim in sims:
+    cols = 2
+    rows = math.ceil(num_sims / cols)
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 6, rows * 4), squeeze=False)
+
+    for idx, sim in enumerate(sims):
         sim_df = df[df['source_file'] == sim]
-        plt.figure(figsize=(8, 5))
-        sns.histplot(sim_df[col_name].dropna(), binwidth=binwidth, kde=True)
-        plt.title(f"{col_name} distribution - {sim}")
-        plt.xlabel(f"{col_name} (minutes)")
-        plt.ylabel("Count")
-        plt.grid(True)
-        plt.tight_layout()
-        
-        clean_sim_name = sim.replace(".json", "").replace(" ", "_")
-        out_path = os.path.join(save_dir, f"histogram_{col_name}_{clean_sim_name}.png")
-        plt.savefig(out_path)
-        plt.close()
+        data = sim_df[col_name].dropna()
+        ax = axes[idx // cols][idx % cols]
+
+        if data.empty:
+            ax.set_visible(False)
+            continue
+
+        sns.histplot(data, binwidth=binwidth, kde=True, ax=ax)
+        ax.set_title(f"{col_name} - {sim}")
+        ax.set_xlabel(f"{col_name} (minutes)")
+        ax.set_ylabel("Count")
+        ax.grid(True)
+
+    # Hide unused axes
+    for i in range(num_sims, rows * cols):
+        fig.delaxes(axes[i // cols][i % cols])
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "combined_histograms.png"))
+    plt.close()
 
 def truncated_exponential_sample(size, lam, low=0, high=2880):
     """
@@ -57,9 +72,10 @@ def truncated_exponential_sample(size, lam, low=0, high=2880):
             samples.append(sample)
     return np.array(samples)
 
-def fit_and_plot_distributions(df, col_name, save_dir="output", binwidth=5):
+def fit_and_plot_distributions_combined(df, col_name, save_dir="output", binwidth=5):
     os.makedirs(save_dir, exist_ok=True)
     sims = df['source_file'].unique()
+    num_sims = len(sims)
 
     candidate_distributions = {
         "exponential": stats.expon,
@@ -67,17 +83,23 @@ def fit_and_plot_distributions(df, col_name, save_dir="output", binwidth=5):
         "lognorm": stats.lognorm
     }
 
-    for sim in sims:
+    cols = 2
+    rows = math.ceil(num_sims / cols)
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 6, rows * 4), squeeze=False)
+
+    for idx, sim in enumerate(sims):
         sim_df = df[df['source_file'] == sim]
         data = sim_df[col_name].dropna()
+        ax = axes[idx // cols][idx % cols]
+
         if data.empty:
+            ax.set_visible(False)
             continue
 
-        # Histogram base
-        plt.figure(figsize=(8, 5))
-        sns.histplot(data, binwidth=binwidth, stat="density", label="Empirical", color="lightgray", edgecolor="black")
-
+        sns.histplot(data, binwidth=binwidth, stat="density", label="Empirical", color="lightgray", edgecolor="black", ax=ax)
         x = np.linspace(data.min(), data.max(), 200)
+
         best_fit = None
         best_sse = float("inf")
 
@@ -86,8 +108,7 @@ def fit_and_plot_distributions(df, col_name, save_dir="output", binwidth=5):
                 params = dist.fit(data)
                 pdf = dist.pdf(x, *params)
                 sse = np.sum((stats.gaussian_kde(data)(x) - pdf) ** 2)
-
-                plt.plot(x, pdf, label=f"{name} (SSE={sse:.2e})")
+                ax.plot(x, pdf, label=f"{name} (SSE={sse:.2e})")
 
                 if sse < best_sse:
                     best_fit = (name, params)
@@ -95,105 +116,121 @@ def fit_and_plot_distributions(df, col_name, save_dir="output", binwidth=5):
             except Exception as e:
                 print(f"Could not fit {name} for {sim}: {e}")
 
-        # Annotate best fit
         if best_fit:
-            plt.title(f"{col_name} Fit - {sim}\nBest fit: {best_fit[0]} (SSE={best_sse:.2e})")
+            ax.set_title(f"{sim}\nBest: {best_fit[0]} (SSE={best_sse:.2e})")
         else:
-            plt.title(f"{col_name} Fit - {sim} (No valid fit)")
+            ax.set_title(f"{sim} (No valid fit)")
 
-        plt.xlabel(f"{col_name} (minutes)")
-        plt.ylabel("Density")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
+        ax.set_xlabel(f"{col_name} (minutes)")
+        ax.set_ylabel("Density")
+        ax.grid(True)
+        ax.legend(fontsize="small")
 
-        out_path = os.path.join(save_dir, f"fit_{col_name}_{sim.replace('.json','').replace(' ','_')}.png")
-        plt.savefig(out_path)
-        plt.close()
+    for i in range(num_sims, rows * cols):
+        fig.delaxes(axes[i // cols][i % cols])
 
-def compare_to_truncated_exponential(df, col_name, lam, save_dir="output", binwidth=30):
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "combined_fit_distributions.png"))
+    plt.close()
+
+def compare_to_truncated_exponential_combined(df, col_name, lam, save_dir="output", binwidth=30):
     os.makedirs(save_dir, exist_ok=True)
+    sims = df['source_file'].unique()
+    num_sims = len(sims)
 
-    for sim in df['source_file'].unique():
+    cols = 2
+    rows = math.ceil(num_sims / cols)
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 6, rows * 4), squeeze=False)
+
+    for idx, sim in enumerate(sims):
         sim_df = df[df['source_file'] == sim]
         real_data = sim_df[col_name].dropna()
+        ax = axes[idx // cols][idx % cols]
 
         if real_data.empty:
+            ax.set_visible(False)
             continue
 
         # Simulate truncated exponential
         sim_data = truncated_exponential_sample(len(real_data), lam)
 
-        # Plot both
-        plt.figure(figsize=(8, 5))
-        sns.histplot(real_data, stat="density", binwidth=binwidth, label="Empirical", color="skyblue", edgecolor="black")
-        sns.histplot(sim_data, stat="density", binwidth=binwidth, label="Simulated Trunc Exp", color="tomato", alpha=0.4)
+        # Plot both real and simulated
+        sns.histplot(real_data, stat="density", binwidth=binwidth, label="Empirical", color="skyblue", edgecolor="black", ax=ax)
+        sns.histplot(sim_data, stat="density", binwidth=binwidth, label="Truncated Exp", color="tomato", alpha=0.4, ax=ax)
 
-        plt.title(f"{col_name} vs Truncated Exp - {sim}")
-        plt.xlabel(f"{col_name} (minutes)")
-        plt.ylabel("Density")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
+        ax.set_title(f"{sim}")
+        ax.set_xlabel(f"{col_name} (minutes)")
+        ax.set_ylabel("Density")
+        ax.grid(True)
+        ax.legend()
 
-        out_path = os.path.join(save_dir, f"compare_trunc_exp_{col_name}_{sim.replace('.json','')}.png")
-        plt.savefig(out_path)
-        plt.close()
+    # Hide unused axes
+    for i in range(num_sims, rows * cols):
+        fig.delaxes(axes[i // cols][i % cols])
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "combined_compare_trunc_exp.png"))
+    plt.close()
 
 def hourly_arrival_count(df, event_filter="arrival", save_dir="output"):
     os.makedirs(save_dir, exist_ok=True)
+    sims = df['source_file'].unique()
+    num_sims = len(sims)
 
-    for sim in df['source_file'].unique():
+    cols = 2
+    rows = math.ceil(num_sims / cols)
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 6, rows * 4), squeeze=False)
+
+    for idx, sim in enumerate(sims):
         sim_df = df[df['source_file'] == sim]
 
-        # Optional: filter for only relevant events
         if event_filter:
             sim_df = sim_df[sim_df['event'] == event_filter]
 
-        # Count events by (day, hour)
         grouped = sim_df.groupby(["day", "sim_hour"]).size().reset_index(name="count")
-
-        # Pivot for heatmap
         pivot = grouped.pivot(index="day", columns="sim_hour", values="count").fillna(0)
 
-        # Plot heatmap
-        plt.figure(figsize=(12, 6))
-        sns.heatmap(pivot, cmap="Blues", annot=True, fmt=".0f", cbar_kws={"label": "Arrival Count"})
+        ax = axes[idx // cols][idx % cols]
+        sns.heatmap(pivot, cmap="Blues", ax=ax, cbar=False, annot=True, fmt=".0f")
+        ax.set_title(f"{sim}")
         if event_filter:
-            plt.title(f"Hourly {event_filter.capitalize()} Counts - {sim}")
+            ax.set_title(f"{event_filter.capitalize()} Counts - {sim}")
         else:
-            plt.title(f"Hourly Arrivals by Day - {sim}")
-        plt.xlabel("Hour of Day")
-        plt.ylabel("Simulation Day")
-        plt.tight_layout()
+            ax.set_title(f"Arrivals Count - {sim}")
+        ax.set_xlabel("Hour")
+        ax.set_ylabel("Day")
+    
+    for i in range(num_sims, rows * cols):
+        fig.delaxes(axes[i // cols][i % cols])
 
-        clean_name = sim.replace(".json", "")
-        plt.savefig(os.path.join(save_dir, f"arrivals_by_day_hour_{clean_name}.png"))
-        plt.close()
+    plt.savefig(os.path.join(save_dir, f"arrivals_by_day_hour.png"))
+    plt.close()
 
-def plot_density_histograms_by_sim(df, col_name, binwidth=5, save_dir="output"):
-    os.makedirs(save_dir, exist_ok=True)
-    sims = df['source_file'].unique()
+# def plot_density_histograms_by_sim(df, col_name, binwidth=5, save_dir="output"):
+#     os.makedirs(save_dir, exist_ok=True)
+#     sims = df['source_file'].unique()
 
-    for sim in sims:
-        sim_df = df[df['source_file'] == sim]
-        data = sim_df[col_name].dropna()
+#     for sim in sims:
+#         sim_df = df[df['source_file'] == sim]
+#         data = sim_df[col_name].dropna()
 
-        if data.empty:
-            continue
+#         if data.empty:
+#             continue
 
-        plt.figure(figsize=(8, 5))
-        sns.histplot(data, binwidth=binwidth, stat="density", kde=True)
-        plt.title(f"Density of {col_name} - {sim}")
-        plt.xlabel(f"{col_name} (minutes)")
-        plt.ylabel("Density")
-        plt.grid(True)
-        plt.tight_layout()
+#         plt.figure(figsize=(8, 5))
+#         sns.histplot(data, binwidth=binwidth, stat="density", kde=True)
+#         plt.title(f"Density of {col_name} - {sim}")
+#         plt.xlabel(f"{col_name} (minutes)")
+#         plt.ylabel("Density")
+#         plt.grid(True)
+#         plt.tight_layout()
 
-        clean_sim_name = sim.replace(".json", "").replace(" ", "_")
-        out_path = os.path.join(save_dir, f"density_{col_name}_{clean_sim_name}.png")
-        plt.savefig(out_path)
-        plt.close()
+#         clean_sim_name = sim.replace(".json", "").replace(" ", "_")
+#         out_path = os.path.join(save_dir, f"density_{col_name}_{clean_sim_name}.png")
+#         plt.savefig(out_path)
+#         plt.close()
 
 def calculate_poisson_rates(df):
     results = []
@@ -226,13 +263,13 @@ if __name__ == "__main__":
     print(df.columns.tolist())
     print(df.head())
     # Plot histograms
-    plot_histograms_by_sim(df, 'return_delay', binwidth=5)
-    plot_histograms_by_sim(df, 'charging_time', binwidth=30)
+    plot_histograms_by_sim_combined(df, 'return_delay', binwidth=5)
+    plot_histograms_by_sim_combined(df, 'charging_time', binwidth=30)
     # Fit and plot distributions
-    fit_and_plot_distributions(df, 'return_delay', binwidth=5)
-    fit_and_plot_distributions(df, 'charging_time', binwidth=30)
+    fit_and_plot_distributions_combined(df, 'return_delay', binwidth=5)
+    fit_and_plot_distributions_combined(df, 'charging_time', binwidth=30)
     # Compare to truncated exponential
-    compare_to_truncated_exponential(df, col_name="return_delay", lam=10.375, binwidth=30)
+    compare_to_truncated_exponential_combined(df, col_name="return_delay", lam=10.375, binwidth=30)
     # Hourly arrival counts
     hourly_arrival_count(df, event_filter="requesting charger")
     rate_summary = calculate_poisson_rates(df)
