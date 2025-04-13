@@ -6,10 +6,10 @@ import os
 import json  # Import JSON module for file writing
 
 # Total EVs
-EVS = 11
+EVS = 30
 
 # Simulation time
-SIM_DAYS = 365 # Total simulation days
+SIM_DAYS = 54 # Total simulation days
 SIM_TIME = SIM_DAYS * 24 * 60  # Total simulation time in minutes
 
 # Use seed for random number generation
@@ -66,7 +66,9 @@ class ChargerAttributes:
     
     def charging_time(self, min_charge_time=30, max_charge_time=1440):
         while True:
-            charge_time = random.expovariate((1 / self.service_rate)) * 60
+            charge_time = random.expovariate(1 / self.service_rate)
+            # Convert to minutes
+            charge_time = charge_time * 60
             if min_charge_time <= charge_time <= max_charge_time:
                 return charge_time
 
@@ -82,10 +84,10 @@ class Delivery:
         return self.miles
 
 def ev(env, uuid: uuid, chargers, charger_type: ChargerAttributes):
-    current_day = 1
+    current_day = 0
     while current_day < SIM_DAYS:
 
-        if current_day == 1:
+        if current_day == 0:
             yield env.timeout(WORKDAY_START) # wait until the first workday starts
 
         if VERBOSE: print(f"{uuid}: Current simulation day: {current_day}")
@@ -96,7 +98,7 @@ def ev(env, uuid: uuid, chargers, charger_type: ChargerAttributes):
         log_ev_event(uuid, env.now, current_day, "Delivery", {"return_delay": return_delay})
         yield env.timeout(return_delay)
 
-        # queue at charger if below threshold
+        # queue at charger
         with chargers.request() as req:
             queue_len = len(chargers.queue)
             if VERBOSE: print(f"{uuid}: Requesting charger | Queue: {queue_len}")
@@ -105,8 +107,11 @@ def ev(env, uuid: uuid, chargers, charger_type: ChargerAttributes):
 
             if VERBOSE: print(f"{uuid}: Starts charging")
             log_ev_event(uuid, env.now, current_day, "starts charging")
+            
             charging_time = charger_type.charging_time(min_charge_time=30, max_charge_time=1440)
             log_ev_event(uuid, env.now, current_day, "charging", {"charging_time": charging_time})
+
+            if VERBOSE: print(f"{uuid}: Charging for {charging_time:.2f} minutes")
             yield env.timeout(charging_time)
 
             if VERBOSE: print(f"{uuid}: Finished charging")
@@ -137,7 +142,9 @@ def get_delivery_time(minimum=360, maximum=600):
     """
     # Simulate delivery time
     while True:
-        delivery_time = random.expovariate((1 / LAMBDA_ARRIVAL) / 60) * 60
+        delivery_time = random.expovariate(1 / LAMBDA_ARRIVAL)
+        # Convert to minutes
+        delivery_time = delivery_time * 60
         if minimum <= delivery_time <= maximum:
             return delivery_time
 
