@@ -3,6 +3,8 @@ import os
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from scipy import stats
+import numpy as np
 
 def load_logs(log_directory="logs"):
     log_files = [f for f in os.listdir(log_directory) if f.endswith("_logs.json")]
@@ -22,8 +24,10 @@ def unpack_extra(df):
     df = pd.concat([df.drop(columns=['extra']), extra_df], axis=1)
     return df
 
-def plot_histograms_by_sim(df, col_name, binwidth=5):
+def plot_histograms_by_sim(df, col_name, binwidth=5, save_dir="output"):
+    os.makedirs(save_dir, exist_ok=True)
     sims = df['source_file'].unique()
+
     for sim in sims:
         sim_df = df[df['source_file'] == sim]
         plt.figure(figsize=(8, 5))
@@ -33,7 +37,66 @@ def plot_histograms_by_sim(df, col_name, binwidth=5):
         plt.ylabel("Count")
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig(f"histogram_{col_name}_{sim}.png")
+        
+        clean_sim_name = sim.replace(".json", "").replace(" ", "_")
+        out_path = os.path.join(save_dir, f"histogram_{col_name}_{clean_sim_name}.png")
+        plt.savefig(out_path)
+        plt.close()
+
+def fit_and_plot_distributions(df, col_name, save_dir="output", binwidth=5):
+    os.makedirs(save_dir, exist_ok=True)
+    sims = df['source_file'].unique()
+
+    candidate_distributions = {
+        "exponential": stats.expon,
+        "weibull": stats.weibull_min,
+        "lognorm": stats.lognorm,
+        "gamma": stats.gamma
+    }
+
+    for sim in sims:
+        sim_df = df[df['source_file'] == sim]
+        data = sim_df[col_name].dropna()
+        if data.empty:
+            continue
+
+        # Histogram base
+        plt.figure(figsize=(8, 5))
+        sns.histplot(data, binwidth=binwidth, stat="density", label="Empirical", color="lightgray", edgecolor="black")
+
+        x = np.linspace(data.min(), data.max(), 200)
+        best_fit = None
+        best_sse = float("inf")
+
+        for name, dist in candidate_distributions.items():
+            try:
+                params = dist.fit(data)
+                pdf = dist.pdf(x, *params)
+                sse = np.sum((stats.gaussian_kde(data)(x) - pdf) ** 2)
+
+                plt.plot(x, pdf, label=f"{name} (SSE={sse:.2e})")
+
+                if sse < best_sse:
+                    best_fit = (name, params)
+                    best_sse = sse
+            except Exception as e:
+                print(f"Could not fit {name} for {sim}: {e}")
+
+        # Annotate best fit
+        if best_fit:
+            plt.title(f"{col_name} Fit - {sim}\nBest fit: {best_fit[0]} (SSE={best_sse:.2e})")
+        else:
+            plt.title(f"{col_name} Fit - {sim} (No valid fit)")
+
+        plt.xlabel(f"{col_name} (minutes)")
+        plt.ylabel("Density")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+
+        out_path = os.path.join(save_dir, f"fit_{col_name}_{sim.replace('.json','').replace(' ','_')}.png")
+        plt.savefig(out_path)
+        plt.close()
 
 def calculate_poisson_rates(df):
     results = []
@@ -55,14 +118,18 @@ def calculate_poisson_rates(df):
             "rho (utilization)": lambda_rate / mu_rate if lambda_rate and mu_rate else None,
         })
     
-    return pd.DataFrame(results)
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(os.path.join("logs", "poisson_rates_summary.csv"), index=False)
+    return results_df
 
 if __name__ == "__main__":
     df = load_logs()
     print(f"Loaded {len(df)} logs from {len(df['source_file'].unique())} files.")
     df = unpack_extra(df)
     print(df.columns.tolist())
-    plot_histograms_by_sim(df, 'return_delay', binwidth=30)
+    plot_histograms_by_sim(df, 'return_delay', binwidth=5)
     plot_histograms_by_sim(df, 'charging_time', binwidth=30)
+    fit_and_plot_distributions(df, 'return_delay', binwidth=5)
+    fit_and_plot_distributions(df, 'charging_time', binwidth=30)
     rate_summary = calculate_poisson_rates(df)
     print(rate_summary)

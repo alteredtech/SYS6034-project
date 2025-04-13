@@ -81,7 +81,6 @@ class Delivery:
         self.miles = random.randint(self.miles_min, self.miles_max)
         return self.miles
 
-
 def ev(env, uuid: uuid, chargers, charger_type: ChargerAttributes):
     current_day = 1
     while current_day < SIM_DAYS:
@@ -197,7 +196,7 @@ def main():
     simulations = [
         {"sim_id": 1, "charger_type": ChargerAttributes(L1,1), "ev_count": EVS, "sim_time": SIM_TIME},
         {"sim_id": 2, "charger_type": ChargerAttributes(L2,1), "ev_count": EVS, "sim_time": SIM_TIME},
-        # {"sim_id": 3, "charger_type": ChargerAttributes(L3,1), "ev_count": EVS, "sim_time": SIM_TIME},
+        {"sim_id": 3, "charger_type": ChargerAttributes(L3,1), "ev_count": EVS, "sim_time": SIM_TIME},
     ]
 
     # Run simulations
