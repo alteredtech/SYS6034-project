@@ -93,37 +93,39 @@
 #     json.dump(all_logs, log_file, indent=4)
 
 import simpy
+import random
 
-WORKDAY_START = 7    # 7 AM
-WORKDAY_END = 21     # 9 PM
-SHIFT_LENGTH = 12     # 8 hours
+NUM_EVS = 10
+SIM_TIME = 24000  # minutes
+MU = 0.4423093 / 60  # service rate per minute
 
-def worker_shift(env, name):
-    while True:
-        current_hour = env.now % 24
-        # Wait until 7 AM
-        if current_hour < WORKDAY_START:
-            wait = WORKDAY_START - current_hour
-            yield env.timeout(wait)
-        elif current_hour >= WORKDAY_END:
-            # Wait until next day's 7 AM
-            wait = (24 - current_hour) + WORKDAY_START
-            yield env.timeout(wait)
-        
-        # Start working
-        print(f"{name} starting work at hour {env.now%24:.2f}")
-        work_duration = min(SHIFT_LENGTH, WORKDAY_END - (env.now % 24))
-        yield env.timeout(work_duration)
-        print(f"{name} ending work at hour {env.now%24:.2f}")
-        
-        # Go off shift for rest of the day
-        current_hour = env.now % 24
-        rest_of_day = 16
-        print(f"current hour: {current_hour}")
-        print(f"rest of day: {rest_of_day}")
-        yield env.timeout(rest_of_day)  # Wait until next day
+def ev_process(env, name, charger):
+    # One trip per EV in this simple case
+    # You can loop this if EVs do multiple trips
 
+    # EV finishes delivery and returns
+    delivery_time = random.uniform(30, 90)  # simulate delivery trip time
+    yield env.timeout(delivery_time)
+    print(f"[{env.now:.2f}] {name} returns to charge after delivery")
+
+    # EV requests charger
+    with charger.request() as req:
+        queue_len = len(charger.queue)
+        print(f"[{env.now:.2f}] {name} requests charger | Queue: {queue_len}")
+        yield req
+        print(f"[{env.now:.2f}] {name} starts charging")
+        charging_time = random.expovariate(MU)
+        yield env.timeout(charging_time)
+        print(f"[{env.now:.2f}] {name} finishes charging")
+
+# Set up environment
 env = simpy.Environment()
-env.process(worker_shift(env, "Worker 1"))
-env.run(until=72)  # Run for 3 simulated days
+charger = simpy.Resource(env, capacity=1)  # Single M/M/1 charger
+
+# Launch all EVs into simulation
+for i in range(1, NUM_EVS + 1):
+    ev_name = f"EV-{i}"
+    env.process(ev_process(env, ev_name, charger))
+
+env.run(until=SIM_TIME)
 

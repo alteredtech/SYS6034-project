@@ -1,19 +1,14 @@
 import simpy
 import uuid
-from enum import Enum
 import random
+import time
+import json  # Import JSON module for file writing
 
 # Total EVs
-EVS = 21
-
-# Battery capacity in kWh
-BATTERY_CAPACITY = 135
-EV_FULL_CHARGE_DISTANCE = 150  # Total distance on a full charge in miles
-# Efficiency in kWh per mile
-EFFICIENCY = BATTERY_CAPACITY / EV_FULL_CHARGE_DISTANCE
+EVS = 10
 
 # Simulation time
-SIM_DAYS = 5 # Total simulation days
+SIM_DAYS = 365 # Total simulation days
 SIM_TIME = SIM_DAYS * 24 * 60  # Total simulation time in minutes
 
 # Working hours
@@ -23,31 +18,46 @@ WORKDAY_END = 21     # 9 PM
 # Get print outputs
 VERBOSE = True
 
+# Rates
+# Service rate for each charger type, mean duration in hours
+L1 = 2.119910 
+L2 = 2.283534
+L3 = 2.393660
+# Arrival rate
+LAMBDA_ARRIVAL = 10.375 # Average arrival rate of EVs per hour
+
+# Global list to store EV logs
+ev_logs = []
+
+def log_ev_event(ev_id, time, event, extra=None):
+    """
+    Log an EV event.
+    
+    :param ev_id: The unique ID of the EV.
+    :param time: The current simulation time.
+    :param event: The event type (e.g., "requesting charger", "charging", "finished charging").
+    :param extra: Any additional information to log.
+    """
+    ev_logs.append({
+        "ev_id": str(ev_id),  # Convert UUID to string for JSON serialization
+        "time": time,
+        "event": event,
+        "extra": extra
+    })
+
 class ChargerAttributes:
-    def __init__(self, service_rate, amount, servers):
+    def __init__(self, service_rate, servers):
         self.service_rate = service_rate
-        self.amount = amount
         self.servers = servers
-
-    def capacity(self):
-        return self.amount * self.servers
-
-class ChargerType(Enum):
-    L1 = ChargerAttributes(service_rate=10, amount=0, servers=0)
-    L2 = ChargerAttributes(service_rate=25, amount=0, servers=0)
-    L3 = ChargerAttributes(service_rate=50, amount=1, servers=1)
-
-    @property
+    
     def rate(self):
-        return self.value.service_rate
-
-    @property
-    def amount(self):
-        return self.value.amount
-
-    @property
+        return self.service_rate
+    
     def capacity(self):
-        return self.value.capacity()
+        return self.servers
+    
+    def charging_time(self):
+        return random.expovariate(self.service_rate * 60) # Convert to minutes
 
 class Delivery:
     def __init__(self, miles_min, miles_max, lambda_val):
@@ -59,62 +69,49 @@ class Delivery:
     def get_miles(self):
         self.miles = random.randint(self.miles_min, self.miles_max)
         return self.miles
-        
-
-class DeliveryType(Enum):
-    SHORT = Delivery(miles_min=0, miles_max=25, lambda_val=0.004295926)
-    MEDIUM = Delivery(miles_min=25, miles_max=50, lambda_val=0.005029587)
-    LONG = Delivery(miles_min=50, miles_max=75, lambda_val=0.004772020)
-    NONE = Delivery(miles_min=0, miles_max=0, lambda_val=0)
-
-# Maximum allowed delivery types
-MAX_DELIVERY_TYPES = {
-    DeliveryType.SHORT: 5,
-    DeliveryType.MEDIUM: 3,
-    DeliveryType.LONG: 2
-}
-
-# Available delivery types (shared across all EVs)
-available_delivery_types = {
-    DeliveryType.SHORT: MAX_DELIVERY_TYPES[DeliveryType.SHORT],
-    DeliveryType.MEDIUM: MAX_DELIVERY_TYPES[DeliveryType.MEDIUM],
-    DeliveryType.LONG: MAX_DELIVERY_TYPES[DeliveryType.LONG]
-}
 
 class EV:
 
-    def __init__(self, env, uuid: uuid, chargers):
+    def __init__(self, env, uuid: uuid, chargers, charger_type: ChargerAttributes):
         self.env = env
         self.uuid = uuid
         self.chargers = chargers
-        self.current_charge = BATTERY_CAPACITY
-        self.max_charge = BATTERY_CAPACITY
+        self.charger_type = charger_type
         self.action = env.process(self.run())
-        self.delivery_type = DeliveryType.NONE
+        # self.delivery_type = Delivery(5, 75, 0.09638554)
 
     def run(self):
         while True:
             # check if it is within working hours
             if self.is_working_hours(): # if it is within working hours
-                # Assign a delivery type
-                self.delivery_type = self.assign_delivery_type()
-                if self.delivery_type == DeliveryType.NONE:
-                    if VERBOSE: print(f"{self.uuid}: No delivery types available. Waiting for reset.")
-                    # TODO: Log
-                    yield from self.wait_until_next_day()
-                    continue
-                yield self.env.timeout(random.randint(1,10)) # wait for 1 minute
+                # Print the current simulation day
+                current_day = int(self.env.now / (24 * 60)) + 1
+                if VERBOSE: print(f"{self.uuid}: Current simulation day: {current_day}")
+                log_ev_event(self.uuid, self.env.now, "current simulation day", {"day": current_day})
                 # get miles
-                miles = self.delivery_type.value.get_miles()
-                # remove charge from battery
-                energy_used = miles * EFFICIENCY
-                self.current_charge -= energy_used
+                # miles = self.delivery_type.value.get_miles()
                 # arrive at charger in poisson distribution
-                self.return_delivery_type()
+                return_delay = self.get_delivery_time(minimum=360, maximum=600) # minimum 6 hour shift and maximum 10 hours
+                if VERBOSE: print(f"{self.uuid}: Delivery time in {return_delay:.2f} minutes")
+                log_ev_event(self.uuid, self.env.now, "Delivery", {"return_delay": return_delay})
+                yield self.env.timeout(return_delay)
+
                 # queue at charger if below threshold
-                # charge at charger until some percentage of battery, service rate
-                # leave charger
-                # wait until next day
+                with self.chargers.request() as req:
+                    queue_len = len(self.chargers.queue)
+                    if VERBOSE: print(f"{self.uuid}: Requesting charger | Queue: {queue_len}")
+                    log_ev_event(self.uuid, self.env.now, "requesting charger", {"queue_length": queue_len})
+                    yield req
+
+                    if VERBOSE: print(f"{self.uuid}: Starts charging")
+                    log_ev_event(self.uuid, self.env.now, "starts charging")
+                    charging_time = random.expovariate(self.charger_type.charging_time())
+                    yield self.env.timeout(charging_time)
+
+                    if VERBOSE: print(f"{self.uuid}: Finished charging")
+                    log_ev_event(self.uuid, self.env.now, "finished charging")
+                
+                yield from self.wait_until_next_day()
             else:
                 yield self.env.timeout(1) # wait for 1 minute
            
@@ -125,51 +122,78 @@ class EV:
     
     def wait_until_next_day(self):
         """Wait until the next workday starts."""
+        if VERBOSE: print(f"{self.uuid}: Finished workday, waiting until next day")
         current_hour = (self.env.now / 60) % 24
         wait = (24 - current_hour) + WORKDAY_START
-        if VERBOSE: print(f"{self.uuid}: Waiting until next day at {wait} hours.")
+        if VERBOSE: print(f"{self.uuid}: Waiting until next day for {wait:.2f} hours.")
+        log_ev_event(self.uuid, self.env.now, "waiting until next day", {"wait_hours": wait})
         yield self.env.timeout(wait * 60)
-    
-    def assign_delivery_type(self):
-        """Assign a delivery type based on availability."""
-        for delivery_type, count in available_delivery_types.items():
-            if count > 0:
-                available_delivery_types[delivery_type] -= 1
-                # TODO: Log
-                if VERBOSE: print(f"{self.uuid}: Assigned {delivery_type.name} delivery type. Remaining: {available_delivery_types[delivery_type]}")
-                return delivery_type
-        return DeliveryType.NONE
-    
-    def return_delivery_type(self):
-        """Return the delivery type to the pool."""
-        if self.delivery_type != DeliveryType.NONE:
-            available_delivery_types[self.delivery_type] += 1
-            if VERBOSE: print(f"{self.uuid}: Returned {self.delivery_type.name} delivery type to the pool. Remaining: {available_delivery_types[self.delivery_type]}")
-            # TODO: Log
-            self.delivery_type = DeliveryType.NONE
 
+    def get_delivery_time(self, minimum=360, maximum=600):
+        """
+        Get the time it takes to deliver the package.
+        Just to make sure the delivery or a persons shift time is not less than 6 hours.
+        """
+        # Simulate delivery time
+        while True:
+            delivery_time = random.expovariate(LAMBDA_ARRIVAL / 60) * 60
+            if minimum <= delivery_time <= maximum:
+                return delivery_time
+    
 
-def main():
-    random.seed(2511)
+def run_simulation(sim_id, charger_type: ChargerAttributes, ev_count, sim_time, verbose=False):
+    global ev_logs
+    ev_logs = []  # Reset logs for each simulation
+
+    random.seed(2511 + sim_id)  # Ensure different seeds for different simulations
     env = simpy.Environment()
 
-    # Create chargers with a capacity of 1 for each level
-    chargers = {}
-    if ChargerType.L1.amount > 0:
-        chargers[ChargerType.L1] = simpy.Resource(env, capacity=ChargerType.L1.capacity)
-    if ChargerType.L2.amount > 0:
-        chargers[ChargerType.L2] = simpy.Resource(env, capacity=ChargerType.L2.capacity)
-    if ChargerType.L3.amount > 0:
-        chargers[ChargerType.L3] = simpy.Resource(env, capacity=ChargerType.L3.capacity)
+    # Create chargers
+    chargers = simpy.Resource(env, capacity=charger_type.capacity())
+    if verbose: print(f"[Sim {sim_id}] Created chargers with type: {charger_type}")
 
     # Create EVs
-    for _ in range(EVS):
+    for _ in range(ev_count):
         ev_uuid = uuid.uuid4()
-        if VERBOSE: print(f"Creating EV with UUID: {ev_uuid}")
-        EV(env, ev_uuid, chargers)
+        if verbose: print(f"[Sim {sim_id}] Creating EV with UUID: {ev_uuid}")
+        EV(env, ev_uuid, chargers, charger_type)
 
     # Run the simulation
-    env.run(until=SIM_TIME)
+    env.run(until=sim_time)
+    if verbose: print(f"[Sim {sim_id}] Simulation completed.")
+    if verbose: print(f"[Sim {sim_id}] Simulation ended at time: {env.now}")
+
+    # Dump logs to a JSON file
+    start_time = time.time()
+    
+    output_file = f"simulation_{sim_id}_logs.json"
+    with open(output_file, "w") as f:
+        json.dump(ev_logs, f)
+    
+    end_time = time.time()
+    real_world_duration = end_time - start_time
+    
+    if verbose: 
+        print(f"[Sim {sim_id}] Logs saved to {output_file}")
+        print(f"[Sim {sim_id}] Real-world simulation duration: {real_world_duration:.2f} seconds")
+
+def main():
+    # Define simulation parameters
+    simulations = [
+        {"sim_id": 1, "charger_type": ChargerAttributes(L1,1), "ev_count": EVS, "sim_time": SIM_TIME},
+        # {"sim_id": 2, "charger_type": ChargerAttributes(L2,1), "ev_count": EVS, "sim_time": SIM_TIME},
+        # {"sim_id": 3, "charger_type": ChargerAttributes(L3,1), "ev_count": EVS, "sim_time": SIM_TIME},
+    ]
+
+    # Run simulations
+    for sim in simulations:
+        run_simulation(
+            sim_id=sim["sim_id"],
+            charger_type=sim["charger_type"],
+            ev_count=sim["ev_count"],
+            sim_time=sim["sim_time"],
+            verbose=VERBOSE
+        )
 
 if __name__ == '__main__':
     main()
