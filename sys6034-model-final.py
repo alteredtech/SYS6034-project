@@ -5,15 +5,15 @@ import time
 import json  # Import JSON module for file writing
 
 # Total EVs
-EVS = 10
+EVS = 1
 
 # Simulation time
 SIM_DAYS = 365 # Total simulation days
 SIM_TIME = SIM_DAYS * 24 * 60  # Total simulation time in minutes
 
 # Working hours
-WORKDAY_START = 7    # 7 AM
-WORKDAY_END = 21     # 9 PM
+WORKDAY_START = 420    # 7 AM
+WORKDAY_END = 1260     # 9 PM
 
 # Get print outputs
 VERBOSE = True
@@ -83,37 +83,46 @@ class EV:
     def run(self):
         while True:
             # check if it is within working hours
-            if self.is_working_hours(): # if it is within working hours
+            # if self.is_working_hours(): # if it is within working hours
                 # Print the current simulation day
-                current_day = int(self.env.now / (24 * 60)) + 1
-                if VERBOSE: print(f"{self.uuid}: Current simulation day: {current_day}")
-                log_ev_event(self.uuid, self.env.now, "current simulation day", {"day": current_day})
-                # get miles
-                # miles = self.delivery_type.value.get_miles()
-                # arrive at charger in poisson distribution
-                return_delay = self.get_delivery_time(minimum=360, maximum=600) # minimum 6 hour shift and maximum 10 hours
-                if VERBOSE: print(f"{self.uuid}: Delivery time in {return_delay:.2f} minutes")
-                log_ev_event(self.uuid, self.env.now, "Delivery", {"return_delay": return_delay})
-                yield self.env.timeout(return_delay)
+            current_day = int(self.env.now / (24 * 60)) + 1
+            if current_day == 1:
+                yield self.env.timeout(WORKDAY_START) # wait until the first workday starts
 
-                # queue at charger if below threshold
-                with self.chargers.request() as req:
-                    queue_len = len(self.chargers.queue)
-                    if VERBOSE: print(f"{self.uuid}: Requesting charger | Queue: {queue_len}")
-                    log_ev_event(self.uuid, self.env.now, "requesting charger", {"queue_length": queue_len})
-                    yield req
+            if VERBOSE: print(f"{self.uuid}: Current simulation day: {current_day}")
+            log_ev_event(self.uuid, self.env.now, "current simulation day", {"day": current_day})
+            # get miles
+            # miles = self.delivery_type.value.get_miles()
+            # arrive at charger in poisson distribution
+            return_delay = self.get_delivery_time(minimum=360, maximum=600) # minimum 6 hour shift and maximum 10 hours
+            if VERBOSE: print(f"{self.uuid}: Delivery time in {return_delay:.2f} minutes")
+            log_ev_event(self.uuid, self.env.now, "Delivery", {"return_delay": return_delay})
+            yield self.env.timeout(return_delay)
 
-                    if VERBOSE: print(f"{self.uuid}: Starts charging")
-                    log_ev_event(self.uuid, self.env.now, "starts charging")
-                    charging_time = random.expovariate(self.charger_type.charging_time())
-                    yield self.env.timeout(charging_time)
+            # queue at charger if below threshold
+            with self.chargers.request() as req:
+                queue_len = len(self.chargers.queue)
+                if VERBOSE: print(f"{self.uuid}: Requesting charger | Queue: {queue_len}")
+                log_ev_event(self.uuid, self.env.now, "requesting charger", {"queue_length": queue_len})
+                yield req
 
-                    if VERBOSE: print(f"{self.uuid}: Finished charging")
-                    log_ev_event(self.uuid, self.env.now, "finished charging")
-                
-                yield from self.wait_until_next_day()
-            else:
-                yield self.env.timeout(1) # wait for 1 minute
+                if VERBOSE: print(f"{self.uuid}: Starts charging")
+                log_ev_event(self.uuid, self.env.now, "starts charging")
+                charging_time = random.expovariate(self.charger_type.charging_time())
+                yield self.env.timeout(charging_time)
+
+                if VERBOSE: print(f"{self.uuid}: Finished charging")
+                log_ev_event(self.uuid, self.env.now, "finished charging")
+            
+            # I think what is happening is that EVs are waiting in the queue 
+            # for the charger when a new day starts to it is skipping days
+            yield from self.wait_until_next_day()
+
+            # from the docs
+            # env.process waits for the process to finish before continuing
+            # env.timeout Events of this type occur (are processed) after a certain amount of (simulated) time has passed. 
+            # They allow a process to sleep (or hold its state) for the given time.
+            
            
 
     def is_working_hours(self):
@@ -122,12 +131,17 @@ class EV:
     
     def wait_until_next_day(self):
         """Wait until the next workday starts."""
-        if VERBOSE: print(f"{self.uuid}: Finished workday, waiting until next day")
-        current_hour = (self.env.now / 60) % 24
-        wait = (24 - current_hour) + WORKDAY_START
-        if VERBOSE: print(f"{self.uuid}: Waiting until next day for {wait:.2f} hours.")
-        log_ev_event(self.uuid, self.env.now, "waiting until next day", {"wait_hours": wait})
-        yield self.env.timeout(wait * 60)
+        current_minute = self.env.now % 1440  # Convert simulation time to hours
+        if VERBOSE: print(f"{self.uuid}: Current simulation time: {self.env.now} minutes, Current minute: {current_minute:.2f} hours")
+        if current_minute < WORKDAY_START:
+            # If it's before the workday starts, wait until WORKDAY_START
+            wait = WORKDAY_START - current_minute
+        else:
+            # If it's after the workday ends, wait until the next WORKDAY_START
+            wait = (1440 - current_minute) + WORKDAY_START
+        if VERBOSE: print(f"{self.uuid}: Waiting until next day for {wait:.2f} minutes.")
+        log_ev_event(self.uuid, self.env.now, "waiting until next day", {"wait_minute": wait})
+        yield self.env.timeout(wait)
 
     def get_delivery_time(self, minimum=360, maximum=600):
         """
