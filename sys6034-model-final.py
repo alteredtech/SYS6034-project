@@ -13,7 +13,7 @@ SIM_DAYS = 54 # Total simulation days
 SIM_TIME = SIM_DAYS * 24 * 60  # Total simulation time in minutes
 
 # Use seed for random number generation
-USE_SEED = True
+USE_SEED = False
 
 # Working hours
 WORKDAY_START = 420    # 7 AM
@@ -160,56 +160,59 @@ def day(sim_time):
     current_day = int(sim_time / 1440) + 1  # Convert simulation time to days
     return current_day
 
-def run_simulation(sim_id, charger_type: ChargerAttributes, ev_count, sim_time, verbose=False):
-    global ev_logs
-    ev_logs = []  # Reset logs for each simulation
+def run_simulation(sim_id, sim_runs, charger_type: ChargerAttributes, ev_count, sim_time, verbose=False):
+    for i in range(sim_runs):
+        if verbose: print(f"[Sim {sim_id}] Starting simulation run {i + 1}/{sim_runs}")
+        global ev_logs
+        ev_logs = []  # Reset logs for each simulation
 
-    if USE_SEED:
-        random.seed(2511 + sim_id)  # Ensure different seeds for different simulations
-    env = simpy.Environment()
+        if USE_SEED:
+            random.seed(2511 + sim_id)  # Ensure different seeds for different simulations
+        env = simpy.Environment()
 
-    # Create chargers
-    chargers = simpy.Resource(env, capacity=charger_type.capacity())
-    if verbose: print(f"[Sim {sim_id}] Created chargers with type: {charger_type}")
+        # Create chargers
+        chargers = simpy.Resource(env, capacity=charger_type.capacity())
+        if verbose: print(f"[Sim {sim_id}] Created chargers with type: {charger_type}")
 
-    # Create EVs
-    for _ in range(ev_count):
-        ev_uuid = uuid.uuid4()
-        if verbose: print(f"[Sim {sim_id}] Creating EV with UUID: {ev_uuid}")
-        env.process(ev(env, ev_uuid, chargers, charger_type))
+        # Create EVs
+        for _ in range(ev_count):
+            ev_uuid = uuid.uuid4()
+            if verbose: print(f"[Sim {sim_id}] Creating EV with UUID: {ev_uuid}")
+            env.process(ev(env, ev_uuid, chargers, charger_type))
 
-    # Run the simulation
-    env.run(until=None)
-    if verbose: print(f"[Sim {sim_id}] Simulation completed.")
-    if verbose: print(f"[Sim {sim_id}] Simulation ended at time: {env.now}")
+        # Run the simulation
+        env.run(until=None)
+        if verbose: print(f"[Sim {sim_id}] Simulation completed.")
+        if verbose: print(f"[Sim {sim_id}] Simulation ended at time: {env.now}")
 
-    # Dump logs to a JSON file
-    start_time = time.time()
-    
-    output_file = f"logs/simulation_{sim_id}_mu_{charger_type.service_rate}_cap_{charger_type.servers}_logs.json"
-    os.makedirs("logs", exist_ok=True)  # Ensure the logs directory exists
-    with open(output_file, "w") as f:
-        json.dump(ev_logs, f)
-    
-    end_time = time.time()
-    real_world_duration = end_time - start_time
-    
-    if verbose: 
-        print(f"[Sim {sim_id}] Logs saved to {output_file}")
-        print(f"[Sim {sim_id}] Real-world simulation duration: {real_world_duration:.2f} seconds")
+        # Dump logs to a JSON file
+        start_time = time.time()
+        
+        output_file = f"logs/simulation_{sim_id}_run_{i+1}_mu_{charger_type.service_rate}_cap_{charger_type.servers}_logs.json"
+        os.makedirs("logs", exist_ok=True)  # Ensure the logs directory exists
+        with open(output_file, "w") as f:
+            json.dump(ev_logs, f)
+        
+        end_time = time.time()
+        real_world_duration = end_time - start_time
+        
+        if verbose: 
+            print(f"[Sim {sim_id}] Logs saved to {output_file}")
+            print(f"[Sim {sim_id}] Real-world simulation duration: {real_world_duration:.2f} seconds")
 
 def main():
     # Define simulation parameters
     simulations = [
-        {"sim_id": 1, "charger_type": ChargerAttributes(L1,1), "ev_count": EVS, "sim_time": SIM_TIME},
-        {"sim_id": 2, "charger_type": ChargerAttributes(L2,1), "ev_count": EVS, "sim_time": SIM_TIME},
-        {"sim_id": 3, "charger_type": ChargerAttributes(L3,1), "ev_count": EVS, "sim_time": SIM_TIME},
+        {"sim_id": 1, "sim_runs": 20, "charger_type": ChargerAttributes(L1,1), "ev_count": EVS, "sim_time": SIM_TIME},
+        {"sim_id": 2, "sim_runs": 20, "charger_type": ChargerAttributes(L2,1), "ev_count": EVS, "sim_time": SIM_TIME},
+        {"sim_id": 3, "sim_runs": 20, "charger_type": ChargerAttributes(L3,1), "ev_count": EVS, "sim_time": SIM_TIME},
     ]
 
     # Run simulations
     for sim in simulations:
         run_simulation(
             sim_id=sim["sim_id"],
+            sim_runs=sim["sim_runs"],
             charger_type=sim["charger_type"],
             ev_count=sim["ev_count"],
             sim_time=sim["sim_time"],
