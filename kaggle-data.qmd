@@ -162,7 +162,6 @@ fit_distributions <- function(x) {
   fits <- list(
     exponential = fitdist(x, "exp"),
     lognormal   = fitdist(x, "lnorm"),
-    gamma       = fitdist(x, "gamma"),
     weibull     = fitdist(x, "weibull")
   )
   aics <- sapply(fits, function(f) f$aic)
@@ -222,7 +221,6 @@ density_data <- x_grid %>%
       switch(best_dist,
              exponential = dexp(x, rate = p["rate"]),
              lognormal   = dlnorm(x, meanlog = p["meanlog"], sdlog = p["sdlog"]),
-             gamma       = dgamma(x, shape = p["shape"], rate = p["rate"]),
              weibull     = dweibull(x, shape = p["shape"], scale = p["scale"])
       )
     })
@@ -251,7 +249,6 @@ density_scaled <- density_data %>%
   left_join(hist_peaks, by = "User Type") %>%
   mutate(y_vals_scaled = y_vals_scaled * y_pos)
 ```
-
 
 ```{r}
 ggplot(data_plot, aes(x = interarrival_time)) +
@@ -335,9 +332,8 @@ poisson <- data_clean %>%
 
 ```
 
-
 ```{r}
-lambda_estimate <- 1 / poisson$lambda_hourly 
+lambda_estimate <- poisson$lambda_hourly 
 lambda_estimate
 ```
 
@@ -423,11 +419,17 @@ ggsave(
 ## Service rate
 
 ```{r}
-mu_estimate <- 1 / mean(data_clean$`Charging Duration (hours)`)
-mu_estimate
+mu_estimate_total <-mean(data_clean$`Charging Duration (hours)`)
+mu_estimate_total
 
-mu_per_min <- mu_estimate / 60
-mu_per_min
+mu_by_charger_type <- data_clean %>%
+  group_by(`Charger Type`) %>%
+  summarise(
+    mean_duration = mean(`Charging Duration (hours)`, na.rm = TRUE),
+    mu = 1 / mean_duration
+  )
+
+mu_by_charger_type
 ```
 
 ## Utilization
@@ -436,7 +438,6 @@ mu_per_min
 rho <- lambda_estimate / mu_estimate
 rho
 ```
-
 
 ```{r}
 # Charger type and charge rate
@@ -494,4 +495,3 @@ ggsave(
   dpi = 300            # Resolution of the plot (in dpi)
 )
 ```
-
