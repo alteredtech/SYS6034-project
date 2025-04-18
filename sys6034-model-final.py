@@ -138,7 +138,7 @@ def ev(env, uuid: uuid, chargers, charger_type: ChargerAttributes):
             log_ev_event(uuid, env.now, current_day, "starts charging")
             
             # Determine the charging time based on the charger type
-            charging_time = charger_type.charging_time(min_charge_time=30, max_charge_time=1440)
+            charging_time = charger_type.charging_time(min_charge_time=5, max_charge_time=2880)
             # Log the charging event with the calculated charging time
             log_ev_event(uuid, env.now, current_day, "charging", {"charging_time": charging_time})
 
@@ -257,6 +257,9 @@ def main():
         {"sim_id": 1, "sim_runs": 20, "charger_type": ChargerAttributes(L1,1), "ev_count": EVS, "sim_time": SIM_TIME},
         {"sim_id": 2, "sim_runs": 20, "charger_type": ChargerAttributes(L2,1), "ev_count": EVS, "sim_time": SIM_TIME},
         {"sim_id": 3, "sim_runs": 20, "charger_type": ChargerAttributes(L3,1), "ev_count": EVS, "sim_time": SIM_TIME},
+        {"sim_id": 4, "sim_runs": 20, "charger_type": ChargerAttributes(20.0,1), "ev_count": EVS, "sim_time": SIM_TIME}, # A more realistic level 1 charge to 80%
+        {"sim_id": 5, "sim_runs": 20, "charger_type": ChargerAttributes(2.85,1), "ev_count": EVS, "sim_time": SIM_TIME}, # A more realistic level 2 charge to 80%
+        {"sim_id": 6, "sim_runs": 20, "charger_type": ChargerAttributes(0.5,1), "ev_count": EVS, "sim_time": SIM_TIME}, # A more realistic level 3 charge to 80%
     ]
 
     # Run simulations
