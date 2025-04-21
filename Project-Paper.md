@@ -26,8 +26,8 @@ Queueing models like M/M/1 and M/M/C are commonly used to simulate EV charging b
 Uncontrolled charging risks grid instability and inefficiency. Smart charging, as categorized by Dahiwale et al. (2024), enables adaptive control using centralized or decentralized coordination. Reinforcement learning methods from Tuchnitz et al. (2021) have shown promise in reducing peak load and improving flexibility. Partial charging—emphasized by Bac and Erdem—offers operational benefits, reducing energy costs and improving schedule adherence.
 
 ## Algorithms for Charging-Aware Routing
-TODO: figure out the VNS, ALNS
-Routing under SoC constraints has been approached through metaheuristics (e.g., VNS, ALNS), hybrid methods, and stochastic control. Bac and Erdem’s VNS/VND solution optimizes routes with partial recharge. Jafari and Boyles’ MDP-based routing adjusts to changing travel and queue conditions. Reinforcement learning models also show potential for routing integration, as shown by Tuchnitz et al. (2021).
+
+Routing under SoC constraints has been approached through metaheuristics (variable neighbourhood search (VNS), variable neighbourhood descent (VND)), hybrid methods, and stochastic control. Bac and Erdem’s VNS/VND solution optimizes routes with partial recharge. Jafari and Boyles’ MDP-based routing adjusts to changing travel and queue conditions. Reinforcement learning models also show potential for routing integration, as shown by Tuchnitz et al. (2021).
 
 ## Discrete-Event Simulation with SimPy
 SimPy is widely used for modeling EV operations due to its flexibility in handling asynchronous, time-driven events. Zhang and Varma (2024) developed a SimPy-based simulation to test ride-hailing EV strategies using real-world NYC data, demonstrating how EVs interact with chargers, trip requests, and dispatching under realistic conditions.
@@ -51,18 +51,18 @@ Feature Engineering
 
 Several derived variables were computed to facilitate later simulation modeling:
 
-Charging Efficiency: Measured in kilowatts (kW), computed as the energy delivered per hour divided by charging time.
-Arrivals Times: Charging sessions were grouped by the hour of start time to estimate temporal patterns in user behavior.
-Interarrival Times: Time between successive vehicle arrivals was calculated per user type to enable queueing model parameter estimation.
-Categorical Encoding: User types and charger types were encoded as ordered factors to enable stratified analysis.
+* Charging Efficiency: Measured in kilowatts (kW), computed as the energy delivered per hour divided by charging time.
+* Arrivals Times: Charging sessions were grouped by the hour of start time to estimate temporal patterns in user behavior.
+* Interarrival Times: Time between successive vehicle arrivals was calculated per user type to enable queueing model parameter estimation.
+* Categorical Encoding: User types and charger types were encoded as ordered factors to enable stratified analysis.
 Verification, Validation, and Credibility Steps
 
 Key queueing parameters were extracted from the cleaned dataset:
 
-Arrival Rate (λ): Mean number of charging events per hour was computed based on corrected start times.
-Service Rate (μ): Mean charging durations were calculated and inverted to obtain service rates. Rates were computed both overall and stratified by charger type.
-Utilization (ρ): System utilization was estimated as the ratio of λ to μ, providing a basis for evaluating congestion under M/M/1 queueing assumptions.
-Interarrival times were further modeled using distribution fitting via the fitdistrplus package. Candidate distributions (exponential, lognormal, Weibull) were compared using AIC values, and best fits were visualized using faceted histograms and scaled density overlays.
+* Arrival Rate (λ): Mean number of charging events per hour was computed based on corrected start times.
+* Service Rate (μ): Mean charging durations were calculated and inverted to obtain service rates. Rates were computed both overall and stratified by charger type.
+* Utilization (ρ): System utilization was estimated as the ratio of λ to μ, providing a basis for evaluating congestion under M/M/1 queueing assumptions.
+* Interarrival times were further modeled using distribution fitting via the fitdistrplus package. Candidate distributions (exponential, lognormal, Weibull) were compared using AIC values, and best fits were visualized using faceted histograms and scaled density overlays.
 
 ## Discrete-Event Simulation in SimPy
 To model the dynamics of EV fleet behavior at charging stations, a discrete-event simulation (DES) framework was implemented using the SimPy library in Python. The simulation captures EV arrival, queueing, and charging behavior under realistic time constraints, using parameter estimates derived from the preprocessed Kaggle dataset.
@@ -74,22 +74,35 @@ The model simulates a fixed fleet of 30 electric vehicles (EVs) over a period of
 The primary components of the simulation include:
 
 * EV Process: Each EV performs a delivery (random exponential distribution duration between 6 to 10 hours, constrained to occur fully within the 7:00 AM to 9:00 PM work shift), returns to request a charger, waits in queue if necessary, charges for a service-time drawn from an exponential distribution, and then waits until the next workday.
-Charger Resource: Simulated as a simpy.Resource with limited capacity (e.g., 1 charger per simulation scenario), where contention for access is modeled explicitly.
-Charger Attributes: Encapsulated in a dedicated class defining the average service rate (μ, in hours) and number of available chargers.
-Event Logging: All EV behaviors are logged to structured JSON files, capturing event timestamps, simulation day/hour, queue lengths, and charging durations. This data format will allow for easier post-processing of the logs collected.
+* Charger Resource: Simulated as a simpy.Resource with limited capacity (e.g., 1 charger per simulation scenario), where contention for access is modeled explicitly.
+* Charger Attributes: Encapsulated in a dedicated class defining the average service rate (μ, in hours) and number of available chargers.
+* Event Logging: All EV behaviors are logged to structured JSON files, capturing event timestamps, simulation day/hour, queue lengths, and charging durations. This data format will allow for easier post-processing of the logs collected.
 
 ### Model Parameters
 
-Initial simulation parameters were drawn from the exploratory analysis performed in R:
+Initial simulation parameters were derived from exploratory data analysis conducted in R.
 
-Arrival Rate (λ): Set at 10.375 arrivals per hour, based on the hourly mean across all users.
-Service Rates (μ): Estimated separately for each charger type using the inverse of the mean charging duration:
-Level 1: 2.12 hours
-Level 2: 2.28 hours
-Level 3 (DC Fast): 2.39 hours
-Simulation Time: 54 days × 24 hours × 60 minutes = 77,760 total simulation minutes.
+* Arrival Rate (λ): Set at 10.375 arrivals per hour, calculated as the average hourly arrival rate across all users.
+* Service Rates (μ): Estimated for each charger type using the inverse of the mean charging duration observed in the dataset:
 
-Additional simulation parameters were crafted for charger service rates from information on time of a charger to reach 80% charge. In the real world we see level 1 chargers being used in residentials, and areas of long stays. While we see level 2 and 3 chargers in residentials and public/commercial locations where the demand will be higher.
+    * Level 1: 2.12 hours
+    * Level 2: 2.28 hours
+    * Level 3 (DC Fast): 2.39 hours
+
+* Simulation Duration: The model was run over 54 days, totaling 77,760 simulation minutes (54 days × 24 hours × 60 minutes).
+
+To more accurately reflect real-world charging behavior, an additional set of service rates was introduced, based on the typical time required for each charger type to reach 80% charge. These values reflect usage patterns observed in both residential and commercial settings:
+
+* Level 1 chargers are commonly found in residential or long-stay locations with low turnover.
+* Level 2 and Level 3 chargers are prevalent in both residential complexes and high-demand public or commercial areas.
+
+These alternative real-world-based service rates (μ) were defined as:
+
+* Level 1: 20.0 hours
+* Level 2: 2.85 hours
+* Level 3 (DC Fast): 0.5 hours
+
+To explore the effects of charger availability within an M/M/c queueing framework, additional simulations varied the number of servers (chargers) for Level 2 chargers from 1 to 4 and 8, testing infrastructure performance under increased capacity.
 
 ### Simulation Logic
 
@@ -152,53 +165,32 @@ To model realistic EV behavior, empirical charging time and return delay distrib
 As shown in Figure X (e.g., avg_combined_charging_time_fit_distributions.png), most charging durations exhibited a right-skewed distribution. The Weibull distribution consistently emerged as the best-fitting model for charging times across multiple simulations (Sim_2, Sim_4, Sim_5, and Sim_6), with KS p-values above 0.8 in several cases. However, simulations such as Sim_1 and Sim_3 were better approximated by the exponential distribution (p > 0.7), suggesting some scenarios were well-modeled by memoryless service times.
 
 ### Return Delay Distributions
-TODO: rewrite this, very inaccurate
 
-For return delays, the best-fitting model across all simulations was the lognormal distribution (see Figure Y: avg_combined_return_delay_fit_distributions.png). This aligns with expected behavior where return times reflect a multiplicative process influenced by daily operational variability. As illustrated in Figure Z (avg_combined_return_delay_compare_trunc_exp.png), truncated exponential approximations under-represented peak return periods and failed to capture the longer tail, further validating the lognormal assumption.
+For return delays, none of the standard theoretical distributions provided a fully accurate fit across all simulations. This limitation arises from the intentional truncation of the exponential distribution used to simulate EV return times. The truncation was necessary to reflect realistic work shift durations, which were constrained to a plausible window of approximately 6 to 10 hours. As a result, the return delays exhibit a shape that diverges from the heavy-tailed behavior of an unbounded exponential or lognormal process.
+
+As shown in Figure Z (avg_combined_return_delay_compare_trunc_exp.png), the truncated exponential approximation significantly underestimates peak return activity and fails to capture the tapering behavior at the upper end of the distribution. These deviations underscore the challenge of applying traditional continuous distributions to operationally constrained processes and highlight the need for custom or empirically-driven models when working within fixed time windows.
 
 ## Charging Demand and Utilization Trends
-TODO: talk about how using level 2 chargers, which amazon uses, with more servers, more will be served before the end of the work day.
 
-Hourly arrival heatmaps (Figure W: avg_hourly_arrivals_requesting charger.png) show peak charger demand occurs consistently between 13:00–15:00, driven by vehicle return patterns. This pattern remained stable across all six simulations, suggesting that even with parameter changes, diurnal rhythms in EV usage produce predictable congestion windows. These insights support the need for time-aware charging strategies or scheduling buffers during peak hours.
+Hourly heatmaps across all eight simulations reveal two key dynamics in fleet charging behavior: when EVs request chargers and when they actually begin charging.
+
+The requesting charger heatmaps (Figure W) show a consistent peak in demand between 13:00 and 15:00 across all scenarios. This congestion window aligns with vehicle return patterns during the late afternoon, indicating strong diurnal regularity in fleet operations. This temporal consistency persists even with changes to service rates and charger types, underscoring the importance of time-aware charging strategies and infrastructure planning to handle clustered demand.
+
+In contrast, the starts charging heatmaps (Figure X) provide insight into how effectively the system handles these requests. Simulations using slower chargers (e.g., Sim 4, Level 1) show dispersed start times throughout the workday, reflecting long service durations and slower throughput. Faster chargers (e.g., Sim 6, Level 3) enable more responsive handling of demand, with starts more concentrated near the request peak—indicating that vehicles are quickly serviced and cleared from the queue.
+
+Simulations 7 and 8, configured with 4 and 8 chargers respectively, demonstrate highly responsive systems where peak demand is immediately absorbed, resulting in sharp vertical bands of charging starts around 13:00–14:00. These serve as high-capacity benchmarks and highlight how increased infrastructure can mitigate queuing delays altogether.
+
+Together, these patterns emphasize the need for dynamic scheduling, capacity-aware infrastructure decisions, and potentially staggered return policies to reduce bottlenecks during critical periods.
 
 ## Erlang-C Performance Analysis
-TODO: fix the results
 
-To evaluate the impact of charger quantity and type on system performance, Erlang-C metrics were computed for simulations 1 through 6 across charger counts c \in \{1,2,3,4\}. These metrics include probability of wait, expected queueing time (E[W_q]), total time in the system (E[W]), and utilization (ρ).
+To evaluate how charger quantity and type influence system performance, Erlang-C metrics were calculated for Simulations 1 through 6 using charger counts \( c \in \{1,2,3,4\} \). These metrics include the probability of wait, expected queueing time \( E[W_q] \), total time in the system \( E[W] \), and server utilization \( \rho \). Simulations 1 through 3, which used empirically derived charging rates from the Kaggle dataset (μ ≈ 0.405–0.451/hr), showed consistently low utilization (under 0.32) and rapidly diminishing wait probabilities as the number of chargers increased. Notably, in Simulation 1, \( E[W_q] \) dropped from 0.87 hours with one charger to just 0.0025 hours with three chargers. Total system time \( E[W] \) converged around 2.2–2.5 hours across all three scenarios when three or more chargers were provided.
 
-* Simulation 1–3 (Kaggle data set charging rates, μ ≈ 0.405–0.451/hr):
-    * Utilization was low (< 0.32 at most), and wait probabilities dropped significantly as more chargers were added.
-    * With just 2–3 chargers, systems achieved minimal queuing delays:
-    * In Simulation 1 (E[W_q]), dropped from 0.87 hrs (1 charger) to ~0.0025 hrs (3 chargers).
-    * Across all three (E[W]), converged to ~2.2–2.5 hours with ≥3 chargers.
+Simulation 4, which modeled Level 1 chargers (μ ≈ 0.065/hr), exhibited the worst performance, representative of slower legacy or home-style charging units. At a single charger, utilization exceeded 1.94, signaling an overloaded system. Even at four chargers, the system remained unstable, with expected time in system \( E[W] \) still around 16.1 hours. Furthermore, numerical instabilities emerged in the Erlang-C outputs (e.g., negative queue times at \( c=1 \)), indicating a breakdown in the model due to excessive demand.
 
-* Simulation 4 (Level 1 chargers, μ ≈ 0.065/hr):
-    * This is the slowest charger in the study, representative of legacy or home-style units.
-    * Utilization exceeded 1.94 at one charger, indicating overload.
-    * Even with 4 chargers, wait times remained extreme (E[W] ≈ 16.1 Hours).
-    * Numerical instabilities in Erlang-C (e.g., negative queue times at c=1) reflect system breakdown.
+In contrast, Simulation 5 simulated Level 2 chargers (μ ≈ 0.343/hr), which reflect common public charging infrastructure. Here, utilization dropped from 0.37 with one charger to just 0.09 with four. As a result, total time in system decreased from 4.62 hours to 2.91 hours, and queueing delay was nearly eliminated with just three chargers (\( E[W_q] < 0.01 \) hours). Simulation 6, using Level 3 fast chargers (μ ≈ 1.7216/hr), performed best. Even at a single charger, utilization was very low (≈ 0.07), and total system time was modest at 0.63 hours. With two or more chargers, both wait probability and queueing delay became negligible.
 
-* Simulation 5 (Level 2 chargers, μ ≈ 0.343/hr):
-    * Mid-tier option closer to what’s seen in public infrastructure.
-    * Utilization dropped from 0.37 (1 charger) to 0.09 (4 chargers).
-    * E[W] decreased from 4.62 hrs to 2.91 hrs.
-    * Three chargers already brought queueing delay to < 0.01 hrs.
-
-* Simulation 6 (Level 3 chargers, μ ≈ 1.7216/hr):
-    * Represents high-speed DC fast charging.
-    * At just 1 charger: utilization ≈ 0.07, E[W]≈0.63 hrs.
-    * With 2 or more, both E[W_q] and P wait become negligible.
-
-* Simulation 7 & 8: Extended Infrastructure Provisioning (c = 4 and c = 8, μ ≈ 0.341/hr)
-    * Sim 7 (starts at c = 4):
-        * At c=4: E[W_total] ≈ 2.93 hrs, ρ ≈ 0.093
-        * Further increasing c=8: reduced wait probability to ≈ 6.6e-9, but E[W] saw minimal improvement (~2.925 hrs)
-    * Sim 8 (starts at c = 8):
-        * Identical trend: virtually zero queueing by c=6, with diminishing returns in E[W].
-
-## Simulation Histograms (20-Run Averages)
-
-Figures combined_charging_time_histograms.png and combined_return_delay_histograms.png confirm consistency across runs. Charging time histograms display the expected long-tail behavior, especially in scenarios with slower chargers. Return delay histograms reinforce the earlier distribution fit results—highlighting a mostly uniform structure within a constrained window (~350–600 mins), shaped by working hours and SoC thresholds.
+Finally, Simulations 7 and 8 explored extended infrastructure provisioning by initializing with four and eight chargers, respectively (μ ≈ 0.341/hr). In Simulation 7, \( E[W] \) was already reduced to approximately 2.93 hours at four chargers with a utilization of just 0.093. Increasing to eight chargers further reduced the wait probability to around 6.6×10⁻⁹, but offered negligible improvement in total time (≈2.925 hours), suggesting diminishing returns. Simulation 8 followed a similar trend, showing virtually zero queueing from six chargers onward, reaffirming the point of saturation in infrastructure scaling.
 
 # CONCLUSION
 
