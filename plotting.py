@@ -188,7 +188,7 @@ def fit_and_plot_distributions_combined_avg_by_scenario(df, col_name, save_dir="
     plt.savefig(os.path.join(save_dir, f"avg_combined_{col_name}_fit_distributions.png"))
     plt.close()
 
-def compare_to_truncated_exponential_avg_by_scenario(df, col_name, lam, binwidth=30, save_dir="output"):
+def compare_to_truncated_exponential_avg_by_scenario(df, col_name, lam, binwidth=30, save_dir="output", normalize=None):
     # Ensure the output directory exists
     os.makedirs(save_dir, exist_ok=True)
 
@@ -219,10 +219,20 @@ def compare_to_truncated_exponential_avg_by_scenario(df, col_name, lam, binwidth
             continue
 
         # Simulate truncated exponential data with the same sample size as the real data
-        sim_data = truncated_exponential_sample(len(real_data), lam)
+        sim_data = truncated_exponential_sample(len(real_data), lam, low=360, high=600)
+
+                # Normalize if requested
+        if normalize == "zscore":
+            real_data = (real_data - real_data.mean()) / real_data.std()
+            sim_data = (sim_data - sim_data.mean()) / sim_data.std()
+        elif normalize == "minmax":
+            real_data = (real_data - real_data.min()) / (real_data.max() - real_data.min())
+            sim_data = (sim_data - sim_data.min()) / (sim_data.max() - sim_data.min())
+        elif normalize == "real_max":
+            sim_data = sim_data * (real_data.max() / sim_data.max())
 
         # Plot the empirical data as a histogram
-        sns.histplot(real_data, stat="density", binwidth=binwidth, label="Empirical", color="skyblue", edgecolor="black", ax=ax)
+        sns.histplot(real_data, stat="density", binwidth=binwidth, label="Empirical", color="skyblue", edgecolor="black", alpha=0.4, ax=ax)
         # Plot the simulated truncated exponential data as a histogram
         sns.histplot(sim_data, stat="density", binwidth=binwidth, label="Truncated Exp", color="tomato", alpha=0.4, ax=ax)
 
@@ -279,7 +289,7 @@ def hourly_arrival_count_avg_by_scenario(df, event_filter="arrival", save_dir="o
         ax = axes[idx // cols][idx % cols]
 
         # Plot the heatmap for the current scenario
-        sns.heatmap(pivot, cmap="Blues", ax=ax, cbar=False, annot=True, fmt=".0f")
+        sns.heatmap(pivot, cmap="Blues", ax=ax, cbar=True, annot=False, fmt=".0f")
 
         # Set titles and labels for the subplot
         ax.set_title(f"{scenario}\nHourly {event_filter.capitalize()} Counts")
@@ -380,7 +390,7 @@ def calculate_poisson_rates_avg_by_scenario(df, save_dir="logs"):
         rho_mean = sum(rho_values) / len(rho_values) if rho_values else None
 
         # Perform Erlang C calculations for the scenario
-        erlang_c(scenario=scenario, lambda_rate=lambda_rate_mean, mu_rate=mu_rate_mean, chargers=4)
+        erlang_c(scenario=scenario, lambda_rate=lambda_mean, mu_rate=mu_mean, chargers=4)
 
         # Append the aggregated results for the current scenario
         results.append({
@@ -388,7 +398,7 @@ def calculate_poisson_rates_avg_by_scenario(df, save_dir="logs"):
             "mean_lambda (1/lambda) (arrivals/hr)": lambda_mean,
             "mean_lambda_rate (arrivals/hrs)": lambda_rate_mean,
             "mean_mu (services/hr)": mu_mean,
-            "mean_mu_rate (services/hrs)": mu_rate_mean,
+            "mean_mu_rate (1/mu) (services/hrs)": mu_rate_mean,
             "mean_rho (utilization)": rho_mean,
             "n_runs": len(runs)  # Number of runs in the scenario
         })
@@ -422,13 +432,18 @@ if __name__ == "__main__":
     fit_and_plot_distributions_combined_avg_by_scenario(df, 'charging_time', binwidth=30)
     
     # Compare the 'return_delay' column to a truncated exponential distribution with lambda=10.375
-    compare_to_truncated_exponential_avg_by_scenario(df, col_name="return_delay", lam=10.375, binwidth=30)
+    # compare_to_truncated_exponential_avg_by_scenario(df, col_name="return_delay", lam=10.375, binwidth=30)
+    compare_to_truncated_exponential_avg_by_scenario(df, col_name="return_delay", lam=10.375, binwidth=30, normalize="min_max")
     
     # Generate heatmaps for hourly arrival counts of events filtered by "requesting charger"
-    hourly_arrival_count_avg_by_scenario(df, event_filter="requesting charger")
+    hourly_arrival_count_avg_by_scenario(df, event_filter="requesting charger") 
+    hourly_arrival_count_avg_by_scenario(df, event_filter="starts charging")
     
     # Calculate Poisson rates (arrival and service rates) for each scenario and save the summary
     rate_summary = calculate_poisson_rates_avg_by_scenario(df)
     
     # Print the summary of calculated rates
     print(rate_summary)
+
+    erlang_c(scenario="sim_7", lambda_rate=0.1271374552791245, mu_rate=0.3418786506112975, chargers=8)
+    erlang_c(scenario="sim_8", lambda_rate=0.12700111182366441, mu_rate=0.34105399812107806, chargers=8)

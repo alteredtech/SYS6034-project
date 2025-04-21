@@ -260,6 +260,8 @@ def main():
         {"sim_id": 4, "sim_runs": 20, "charger_type": ChargerAttributes(20.0,1), "ev_count": EVS, "sim_time": SIM_TIME}, # A more realistic level 1 charge to 80%
         {"sim_id": 5, "sim_runs": 20, "charger_type": ChargerAttributes(2.85,1), "ev_count": EVS, "sim_time": SIM_TIME}, # A more realistic level 2 charge to 80%
         {"sim_id": 6, "sim_runs": 20, "charger_type": ChargerAttributes(0.5,1), "ev_count": EVS, "sim_time": SIM_TIME}, # A more realistic level 3 charge to 80%
+        {"sim_id": 7, "sim_runs": 20, "charger_type": ChargerAttributes(2.85,4), "ev_count": EVS, "sim_time": SIM_TIME},
+        {"sim_id": 8, "sim_runs": 20, "charger_type": ChargerAttributes(2.85,8), "ev_count": EVS, "sim_time": SIM_TIME},
     ]
 
     # Run simulations
