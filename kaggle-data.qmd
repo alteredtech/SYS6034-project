@@ -386,7 +386,7 @@ ggplot(data_clean, aes(x = efficiency_kw)) +
   facet_wrap(~ `Charger Type`, scales = "free_y") +
   labs(
     title = "Charging Efficiency per Session (Faceted by Charger Type)",
-    x = "Efficiency (kWh per hour)",
+    x = "Efficiency (kW)",
     y = "Count"
   ) +
   theme_minimal()
@@ -404,7 +404,7 @@ ggsave(
 ```{r}
 ggplot(data_clean, aes(x = efficiency_kw)) +
   geom_histogram(binwidth = bw_charge_efficiency, fill = "gray", color = "black") +
-  labs(title = "Charging Efficiency (kWh per hour)", x = "Efficiency", y = "Count") +
+  labs(title = "Charging Efficiency (kW)", x = "Efficiency", y = "Count") +
   theme_minimal()
 
 ggsave(
