@@ -15,37 +15,44 @@ The transition to electric vehicles (EVs) presents significant challenges for fl
 # INTRODUCTION
 
 ## Rise of EVs and Recharging Challenges
+
 The global transition to electric vehicles (EVs) is reshaping transportation and energy systems, spurred by environmental goals and supported by policy, infrastructure, and battery advances. Yet, this shift introduces routing and charging challenges—EVs have limited range, slower refueling (charging), and depend on an uneven charging infrastructure. These issues are especially acute for commercial fleets with tight delivery schedules, where charger availability and wait times directly impact operations.
 
 ## Problem Statement and Research Gap
+
 Fleet routing for EVs must account for real-time State of Charge (SoC), delivery deadlines, and unpredictable charger access. Standard vehicle routing models fall short of capturing these dynamics, including queuing behavior and energy constraints. This research addresses that gap by integrating queueing theory and discrete-event simulation to study how recharging strategies influence charger demand and system performance.
 
 <div style="page-break-after: always;"></div>
 
 ## SoC-Aware Routing Models
+
 Bac and Erdem (2021) introduced the EVRPTW-PR, incorporating partial charging, time windows, and heterogeneous fleets. Their model tracks SoC, recharge duration, and routing feasibility under real-world energy constraints. Jafari and Boyles (2017) approached the problem as a Markov Decision Process, optimizing single-EV decisions under stochastic, time-varying conditions. These works highlight the need for real-time SoC management and flexible charging decisions.
 
 ## Queueing Models at Chargers
+
 Queueing models like M/M/1 and M/M/C are commonly used to simulate EV charging behavior. However, exponential service time assumptions often misrepresent real charging durations. Later models, such as Liu et al. (2021)'s M/D/C formulation, better capture real-world conditions by assuming deterministic charging times with stochastic arrivals, achieving improved accuracy in urban-scale simulations.
 
 ## Smart and Partial Charging
-Uncontrolled charging risks grid instability and inefficiency. Smart charging, as categorized by Dahiwale et al. (2024), enables adaptive control using centralized or decentralized coordination. Reinforcement learning methods from Tuchnitz et al. (2021) have shown promise in reducing peak load and improving flexibility. Partial charging—emphasized by Bac and Erdem—offers operational benefits, reducing energy costs and improving schedule adherence.
+
+Uncoordinated EV charging can lead to grid strain and inefficiencies. Smart charging strategies, as outlined by Dahiwale et al. (2024), introduce adaptive control mechanisms through centralized or decentralized systems. Tuchnitz et al. (2021) demonstrated the potential of reinforcement learning approaches to minimize peak demand and enhance load flexibility. Additionally, Bac and Erdem highlight the advantages of partial charging, which can lower energy expenditures and support more consistent adherence to operational schedules.
 
 ## Algorithms for Charging-Aware Routing
 
-Routing under SoC constraints has been approached through metaheuristics (variable neighbourhood search (VNS), variable neighbourhood descent (VND)), hybrid methods, and stochastic control. Bac and Erdem’s VNS/VND solution optimizes routes with partial recharge. Jafari and Boyles’ MDP-based routing adjusts to changing travel and queue conditions. Reinforcement learning models also show potential for routing integration, as shown by Tuchnitz et al. (2021).
+Routing under SoC constraints has been approached through metaheuristics (variable neighbourhood search (VNS), variable neighbourhood descent (VND)), hybrid methods, and stochastic control. Bac and Erdem’s VNS/VND solution optimizes routes with partial recharge. Jafari and Boyles’ Markov Decision Processes (MDP)-based routing adjusts to changing travel and queue conditions. Reinforcement learning models also show potential for routing integration, as shown by Tuchnitz et al. (2021).
 
 ## Discrete-Event Simulation with SimPy
-SimPy is widely used for modeling EV operations due to its flexibility in handling asynchronous, time-driven events. Zhang and Varma (2024) developed a SimPy-based simulation to test ride-hailing EV strategies using real-world NYC data, demonstrating how EVs interact with chargers, trip requests, and dispatching under realistic conditions.
+
+SimPy is used for modeling EV operations due to its flexibility in handling asynchronous, time-driven events. Zhang and Varma (2024) developed a SimPy-based simulation to test ride-hailing EV strategies using real-world NYC data, demonstrating how EVs interact with chargers, trip requests, and dispatching under realistic conditions.
 
 ## Contribution of This Work
+
 This study extends existing work by developing a SimPy-based simulation grounded in empirical data. Arrival and service rates are estimated using a cleaned Kaggle dataset in R, assuming Poisson arrivals and exponential charging durations. The simulation evaluates how different recharging strategies and charger configurations affect queue length, wait time, and system utilization. Post-simulation metrics are further analyzed using Erlang-C equations to support infrastructure planning.
 
 <div style="page-break-after: always;"></div>
 
 # METHOD
 ## Data Preprocessing and Exploratory Analysis in RStudio
-To support the design and parameterization of the simulation model, an initial dataset was obtained from Kaggle titled Electric Vehicle Charging Patterns (Electric Vehicle Charging Patterns, 2024). This dataset served as a proxy for electric vehicle (EV) charging behavior. According to its creators, the dataset was synthetically generated based on publicly available information, industry reports, and real-world charging station data. It was developed through data synthesis techniques incorporating diverse parameters such as vehicle specifications, user demographics, energy consumption profiles, and charging infrastructure characteristics. Statistical distributions and controlled variability were employed to reflect both common and edge-case charging behaviors across a geographically diverse set of urban and suburban charging environments.
+To support the design and parameterization of the simulation model, an initial dataset was obtained from Kaggle titled Electric Vehicle Charging Patterns (Electric Vehicle Charging Patterns, 2024). This dataset served as a proxy for EV charging behavior. According to its creators, the dataset was synthetically generated based on publicly available information, industry reports, and real-world charging station data. It was developed through data synthesis techniques incorporating diverse parameters such as vehicle specifications, user demographics, energy consumption profiles, and charging infrastructure characteristics. Statistical distributions and controlled variability were employed to reflect both common and edge-case charging behaviors across a geographically diverse set of urban and suburban charging environments.
 
 All data processing and preliminary statistical analysis were conducted in RStudio (Version 2024.12.1+563) using the tidyverse, fitdistrplus, and lubridate libraries. Despite the dataset’s utility as a starting point, several inconsistencies and data quality issues were identified, necessitating extensive preprocessing to improve reliability and ensure alignment with the assumptions of the simulation model:
 
@@ -53,7 +60,7 @@ All data processing and preliminary statistical analysis were conducted in RStud
 * State of Charge Corrections: Some entries indicated a decrease in the state of charge (SoC) during a session (end SoC lower than start SoC). These instances were corrected by inverting the the start SoC and end SoC values where appropriate. Charges exceeding 100% or beginning at or below 0% were excluded.
 * Charger Type Discrepancies: All charger levels (Level 1, Level 2, DC Fast) showed nearly identical average charging rates, contrary to real-world expectations. This raised concerns about the data's realism, prompting further evaluation of charging efficiency distributions.
 
-To improve dataset focus and reduce noise from geographical variability, only records from Los Angeles were retained. Results from
+To improve dataset focus and reduce noise from geographical variability, only records from Los Angeles were retained.
 
 Feature Engineering
 
@@ -63,7 +70,6 @@ Several derived variables were computed to facilitate later simulation modeling:
 * Arrivals Times: Charging sessions were grouped by the hour of start time to estimate temporal patterns in user behavior.
 * Interarrival Times: Time between successive vehicle arrivals was calculated per user type to enable queueing model parameter estimation.
 * Categorical Encoding: User types and charger types were encoded as ordered factors to enable stratified analysis.
-Verification, Validation, and Credibility Steps
 
 Key queueing parameters were extracted from the cleaned dataset:
 
@@ -73,16 +79,17 @@ Key queueing parameters were extracted from the cleaned dataset:
 * Interarrival times were further modeled using distribution fitting via the fitdistrplus package. Candidate distributions (exponential, lognormal, Weibull) were compared using AIC values, and best fits were visualized using faceted histograms and scaled density overlays.
 
 ## Discrete-Event Simulation in SimPy
+
 To model the dynamics of EV fleet behavior at charging stations, a discrete-event simulation (DES) framework was implemented using the SimPy library in Python. The simulation captures EV arrival, queueing, and charging behavior under realistic time constraints, using parameter estimates derived from the preprocessed Kaggle dataset.
 
 ### Simulation Overview
 
-The model simulates a fixed fleet of 30 electric vehicles (EVs) over a period of 54 days, with each day comprising 24 hours. However, vehicles operate only during defined working hours: 7:00 AM to 9:00 PM. Each EV alternates between delivery trips and charging, looping over consecutive workdays.
+The model simulates a fixed fleet of 30 EVs over a period of 54 days, with each day comprising 24 hours. However, vehicles operate only during defined working hours: 7:00 AM to 9:00 PM. Each EV alternates between delivery trips and charging, looping over consecutive workdays.
 
 The primary components of the simulation include:
 
 * EV Process: Each EV performs a delivery (random exponential distribution duration between 6 to 10 hours, constrained to occur fully within the 7:00 AM to 9:00 PM work shift), returns to request a charger, waits in queue if necessary, charges for a service-time drawn from an exponential distribution, and then waits until the next workday.
-* Charger Resource: Simulated as a simpy.Resource with limited capacity (1 charger per simulation scenario), where contention for access is modeled explicitly.
+* Charger Resource: Simulated as a `simpy.Resource` with limited capacity (1 charger per simulation scenario), where contention for access is modeled explicitly.
 * Charger Attributes: Encapsulated in a dedicated class defining the average service rate (μ, in hours) and number of available chargers.
 * Event Logging: All EV behaviors are logged to structured JSON files, capturing event timestamps, simulation day/hour, queue lengths, and charging durations. This data format will allow for easier post-processing of the logs collected.
 
@@ -236,9 +243,9 @@ Finally, Simulations 7 and 8 explored extended infrastructure provisioning by in
 
 # CONCLUSION
 
-This study examined the complex interplay between electric vehicle (EV) fleet operations and charging infrastructure using a discrete-event simulation framework grounded in real-world-inspired data. By integrating queueing theory, SimPy-based modeling, and empirical parameter estimation from a synthesized Kaggle dataset, the research explored how varying charger types, service rates, and charger quantities affect system performance across a range of scenarios.
+This study examined the complex interplay between EV fleet operations and charging infrastructure using a discrete-event simulation framework grounded in real-world-inspired data. By integrating queueing theory, SimPy-based modeling, and empirical parameter estimation from a synthesized Kaggle dataset, the research explored how varying charger types, service rates, and charger quantities affect system performance across a range of scenarios.
 
-The simulation findings confirm that recharging strategy and infrastructure design are pivotal to ensuring operational efficiency in EV fleets. Specifically, slow chargers like Level 1 create significant bottlenecks under realistic demand, even with increased capacity. In contrast, Level 2 and especially Level 3 (DC fast) chargers effectively reduce queueing delays and overall time in system, demonstrating their critical role in high-demand fleet environments. Erlang-C analyses revealed that small increments in infrastructure—particularly for mid-tier chargers—can sharply reduce queue times and increase system responsiveness. However, beyond a certain point, adding more chargers offers diminishing returns, emphasizing the importance of strategic sizing rather than brute-force expansion.
+The simulation findings confirm that recharging strategy and infrastructure design are pivotal to ensuring operational efficiency in EV fleets. Specifically, slow chargers like Level 1 create significant bottlenecks under realistic demand, even with increased capacity. In contrast, Level 2 and especially Level 3 (DC fast) chargers effectively reduce queueing delays and overall time in system, demonstrating their critical role in high-demand fleet environments. Erlang-C analyses revealed that small increments in infrastructure, particularly for mid-tier chargers, can sharply reduce queue times and increase system responsiveness. However, beyond a certain point, adding more chargers offers diminishing returns, emphasizing the importance of strategic sizing rather than brute-force expansion.
 
 These results support the hypothesis that optimal fleet performance is contingent not just on charger availability, but on a nuanced understanding of charger speed, fleet behavior, and time-of-day dynamics. The hourly heatmaps and distribution fitting further demonstrate the need for time-aware infrastructure planning, highlighting consistent afternoon peaks in demand regardless of charger type.
 
